@@ -210,6 +210,14 @@ scmi_clock_protocol_attributes_get(const struct scmi_protocol_handle *ph,
 
 	ph->xops->xfer_put(ph, t);
 
+	SCMI_QUIRK(clock_set_rate_no_async, ({
+		if (ci->max_async_req) {
+			ci->max_async_req = 0;
+			dev_dbg(ph->dev,
+				"SCMI clock async disabled by quirk\n");
+		}
+	}));
+
 	if (!ret) {
 		if (!ph->hops->protocol_msg_check(ph, CLOCK_RATE_NOTIFY, NULL))
 			ci->notify_rate_changed_cmd = true;

@@ -2013,7 +2013,7 @@ static void arm_cmn_migrate(struct arm_cmn *cmn, unsigned int cpu)
 
 	perf_pmu_migrate_context(&cmn->pmu, cmn->cpu, cpu);
 	for (i = 0; i < cmn->num_dtcs; i++)
-		irq_set_affinity(cmn->dtc[i].irq, cpumask_of(cpu));
+		irq_set_affinity_hint(cmn->dtc[i].irq, cpumask_of(cpu));
 	cmn->cpu = cpu;
 }
 
@@ -2106,7 +2106,7 @@ static int arm_cmn_init_irqs(struct arm_cmn *cmn)
 		if (err)
 			return err;
 
-		err = irq_set_affinity(irq, cpumask_of(cmn->cpu));
+		err = irq_set_affinity_hint(irq, cpumask_of(cmn->cpu));
 		if (err)
 			return err;
 	next:
@@ -2230,7 +2230,7 @@ static void arm_cmn_init_node_info(struct arm_cmn *cmn, u32 offset, struct arm_c
 	else
 		level = 2;
 
-	dev_dbg(cmn->dev, "node%*c%#06hx%*ctype:%-#6x id:%-4hd off:%#x\n",
+	dev_info(cmn->dev, "node%*c%#06hx%*ctype:%-#6x id:%-4hd off:%#x\n",
 			(level * 2) + 1, ' ', node->id, 5 - (level * 2), ' ',
 			node->type, node->logid, offset);
 }

@@ -148,6 +148,9 @@ int xhci_halt(struct xhci_hcd *xhci)
 /*
  * Set the run bit and wait for the host to be running.
  */
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+extern unsigned int irq_save;
+#endif
 int xhci_start(struct xhci_hcd *xhci)
 {
 	u32 temp;
@@ -172,9 +175,16 @@ int xhci_start(struct xhci_hcd *xhci)
 	if (!ret) {
 		/* clear state flags. Including dying, halted or removing */
 		xhci->xhc_state = 0;
-		xhci->run_graceperiod = jiffies + msecs_to_jiffies(500);
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+	xhci->run_graceperiod = jiffies + msecs_to_jiffies(5);
+#else
+	xhci->run_graceperiod = jiffies + msecs_to_jiffies(500);
+#endif
 	}
 
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+	enable_irq(irq_save);
+#endif
 	return ret;
 }
 
@@ -1095,9 +1105,11 @@ int xhci_resume(struct xhci_hcd *xhci, bool power_lost, bool is_auto_resume)
 	 * transition into bus suspend.
 	 */
 
+#if !IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
 	if (time_before(jiffies, xhci->usb2_rhub.bus_state.next_statechange) ||
 	    time_before(jiffies, xhci->usb3_rhub.bus_state.next_statechange))
 		msleep(100);
+#endif
 
 	set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
 	if (xhci->shared_hcd)

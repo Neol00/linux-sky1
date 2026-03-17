@@ -25,7 +25,7 @@
 #define CDNSP_ENDPOINTS_NUM	31
 
 /* Best Effort Service Latency. */
-#define CDNSP_DEFAULT_BESL	0
+#define CDNSP_DEFAULT_BESL	5
 
 /* Device Controller command default timeout value in us */
 #define CDNSP_CMD_TIMEOUT	(15 * 1000)
@@ -1520,7 +1520,7 @@ void cdnsp_free_endpoint_rings(struct cdnsp_device *pdev, struct cdnsp_ep *pep);
 /* Device controller glue. */
 int cdnsp_find_next_ext_cap(void __iomem *base, u32 start, int id);
 int cdnsp_halt(struct cdnsp_device *pdev);
-void cdnsp_died(struct cdnsp_device *pdev);
+void cdnsp_died(struct cdnsp_device *pdev, bool show_msg);
 int cdnsp_reset(struct cdnsp_device *pdev);
 irqreturn_t cdnsp_irq_handler(int irq, void *priv);
 int cdnsp_setup_device(struct cdnsp_device *pdev, enum cdnsp_setup_dev setup);

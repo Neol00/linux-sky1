@@ -611,7 +611,7 @@ static void cdnsp_unmap_td_bounce_buffer(struct cdnsp_device *pdev,
 	trace_cdnsp_bounce_unmap(td->preq, seg->bounce_len, seg->bounce_offs,
 				 seg->bounce_dma, 0);
 
-	if (!preq->direction) {
+	if (preq->direction) {
 		dma_unmap_single(pdev->dev, seg->bounce_dma,
 				 ring->bounce_buf_len,  DMA_TO_DEVICE);
 		return;
@@ -620,13 +620,18 @@ static void cdnsp_unmap_td_bounce_buffer(struct cdnsp_device *pdev,
 	dma_unmap_single(pdev->dev, seg->bounce_dma, ring->bounce_buf_len,
 			 DMA_FROM_DEVICE);
 
-	/* For in transfers we need to copy the data from bounce to sg */
+	if (preq->request.num_mapped_sgs) {
+	/* For out transfers we need to copy the data from bounce to sg */
 	len = sg_pcopy_from_buffer(preq->request.sg, preq->request.num_sgs,
 				   seg->bounce_buf, seg->bounce_len,
 				   seg->bounce_offs);
 	if (len != seg->bounce_len)
 		dev_warn(pdev->dev, "WARN Wrong bounce buffer read length: %zu != %d\n",
 			 len, seg->bounce_len);
+	} else {
+		memcpy(preq->request.buf + seg->bounce_offs, seg->bounce_buf,
+		       seg->bounce_len);
+	}
 
 	seg->bounce_len = 0;
 	seg->bounce_offs = 0;
@@ -1544,7 +1549,7 @@ irqreturn_t cdnsp_thread_irq_handler(int irq, void *data)
 		 * Driver should simply ignore it.
 		 */
 		if (pdev->gadget_driver)
-			cdnsp_died(pdev);
+			cdnsp_died(pdev, false);
 
 		spin_unlock_irqrestore(&pdev->lock, flags);
 		local_bh_enable();
@@ -1578,7 +1583,7 @@ irqreturn_t cdnsp_irq_handler(int irq, void *priv)
 	status = readl(&pdev->op_regs->status);
 
 	if (status == ~(u32)0) {
-		cdnsp_died(pdev);
+		cdnsp_died(pdev, true);
 		return IRQ_HANDLED;
 	}
 
@@ -1591,7 +1596,7 @@ irqreturn_t cdnsp_irq_handler(int irq, void *priv)
 	writel(irq_pending, &pdev->ir_set->irq_pending);
 
 	if (status & STS_FATAL) {
-		cdnsp_died(pdev);
+		cdnsp_died(pdev, true);
 		return IRQ_HANDLED;
 	}
 
@@ -1830,9 +1835,13 @@ static int cdnsp_align_td(struct cdnsp_device *pdev,
 
 	/* Create a max max_pkt sized bounce buffer pointed to by last trb. */
 	if (preq->direction) {
-		sg_pcopy_to_buffer(preq->request.sg,
+		if (preq->request.num_mapped_sgs)
+			sg_pcopy_to_buffer(preq->request.sg,
 				   preq->request.num_mapped_sgs,
 				   seg->bounce_buf, new_buff_len, enqd_len);
+		else
+			memcpy(seg->bounce_buf, preq->request.buf + enqd_len, new_buff_len);
+
 		seg->bounce_dma = dma_map_single(dev, seg->bounce_buf,
 						 max_pkt, DMA_TO_DEVICE);
 	} else {

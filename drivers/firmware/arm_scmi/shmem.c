@@ -9,7 +9,9 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/platform_device.h>
 #include <linux/processor.h>
+#include <linux/property.h>
 #include <linux/types.h>
 
 #include <linux/bug.h>
@@ -23,6 +25,7 @@
  * arguments or any protocol data to be expressed in little endian
  * format only.
  */
+#ifndef CONFIG_PM_EXCEPTION_PROTOCOL
 struct scmi_shared_mem {
 	__le32 reserved;
 	__le32 channel_status;
@@ -35,6 +38,47 @@ struct scmi_shared_mem {
 	__le32 msg_header;
 	u8 msg_payload[];
 };
+#else
+
+#define SCP_PM_MSG_LEN (0x7f)
+#define PM_MSG_MAX_LEN_TX (12 * 4)
+#define PM_MSG_MAX_LEN_RX (13 * 4)
+
+struct scmi_shared_mem {
+	union {
+		__le32 reserved;
+		struct {
+			__le32 buf_len	: 7;
+			__le32 rsvd0	: 1;
+			__le32 msg_route: 8;
+			__le32 rsvd1	: 16;
+		} msg_info;
+	};
+	__le32 channel_status;
+#define SCMI_SHMEM_CHAN_STAT_CHANNEL_ERROR	BIT(1)
+#define SCMI_SHMEM_CHAN_STAT_CHANNEL_FREE	BIT(0)
+	union {
+		__le32 reserved1[2];
+		struct {
+			__le32 statusCode;
+			__le32 traceCode;
+		} stCode;
+	};
+	__le32 flags;
+#define SCMI_SHMEM_FLAG_INTR_ENABLED	BIT(0)
+	__le32 length;
+	union {
+		__le32 msg_header;
+		struct {
+			__le32 msgID	: 16;
+			__le32 rsvd0	: 2;
+			__le32 token	: 10;
+			__le32 rsvd1	: 4;
+		} pm_header;
+	};
+	u8 msg_payload[];
+};
+#endif
 
 static inline void shmem_memcpy_fromio32(void *to,
 					 const void __iomem *from,
@@ -91,6 +135,14 @@ static void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
 			     shmem_copy_toio_t copy_toio)
 {
 	ktime_t stop;
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	bool isCustomized;
+
+	if (xfer->hdr.protocol_id == 0x81)
+		isCustomized = true;
+	else
+		isCustomized = false;
+#endif
 
 	/*
 	 * Ideally channel must be free by now unless OS timeout last
@@ -124,8 +176,20 @@ static void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
 		  &shmem->flags);
 	iowrite32(sizeof(shmem->msg_header) + xfer->tx.len, &shmem->length);
 	iowrite32(pack_scmi_header(&xfer->hdr), &shmem->msg_header);
-	if (xfer->tx.buf)
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	if (isCustomized)
+		iowrite32(0xc7f, &shmem->msg_info);
+	else
+		iowrite32(0x0, &shmem->reserved);
+#endif
+	if (xfer->tx.buf) {
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+		if (isCustomized)
+			if (xfer->tx.len > PM_MSG_MAX_LEN_TX)
+				pr_err("TX Length is OVERSIZE!\n");
+#endif
 		copy_toio(shmem->msg_payload, xfer->tx.buf, xfer->tx.len);
+	}
 }
 
 static u32 shmem_read_header(struct scmi_shared_mem __iomem *shmem)
@@ -139,12 +203,44 @@ static void shmem_fetch_response(struct scmi_shared_mem __iomem *shmem,
 {
 	size_t len = ioread32(&shmem->length);
 
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	bool isCustomized;
+
+	if (xfer->hdr.protocol_id == 0x81)
+		isCustomized = true;
+	else
+		isCustomized = false;
+
+	if (isCustomized)
+		xfer->hdr.status = ioread32(&shmem->stCode.statusCode);
+	else
+		xfer->hdr.status = ioread32(shmem->msg_payload);
+#else
 	xfer->hdr.status = ioread32(shmem->msg_payload);
+#endif
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	if (isCustomized) {
+		xfer->rx.len = min_t(size_t, xfer->rx.len, len > 4 ? len - 4 : 0);
+		if (xfer->rx.len > PM_MSG_MAX_LEN_RX)
+			pr_err("RX Length is OVERSIZE!\n");
+	} else {
+		/* Skip the length of header and status in shmem area i.e 8 bytes */
+		xfer->rx.len = min_t(size_t, xfer->rx.len, len > 8 ? len - 8 : 0);
+	}
+#else
 	/* Skip the length of header and status in shmem area i.e 8 bytes */
 	xfer->rx.len = min_t(size_t, xfer->rx.len, len > 8 ? len - 8 : 0);
+#endif
 
 	/* Take a copy to the rx buffer.. */
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	if (isCustomized)
+		copy_fromio(xfer->rx.buf, shmem->msg_payload + 4 * 12, xfer->rx.len);
+	else
+		copy_fromio(xfer->rx.buf, shmem->msg_payload + 4, xfer->rx.len);
+#else
 	copy_fromio(xfer->rx.buf, shmem->msg_payload + 4, xfer->rx.len);
+#endif
 }
 
 static void shmem_fetch_notification(struct scmi_shared_mem __iomem *shmem,
@@ -202,25 +298,75 @@ static void __iomem *shmem_setup_iomap(struct scmi_chan_info *cinfo,
 	struct resource lres = {};
 	resource_size_t size;
 	void __iomem *addr;
-	u32 reg_io_width;
-
-	struct device_node *shmem __free(device_node) = of_parse_phandle(cdev->of_node,
-		"shmem", idx);
-
-	if (!shmem)
-		return IOMEM_ERR_PTR(-ENODEV);
-
-	if (!of_device_is_compatible(shmem, "arm,scmi-shmem"))
-		return IOMEM_ERR_PTR(-ENXIO);
+	u32 reg_io_width = 0;
 
 	/* Use a local on-stack as a working area when not provided */
 	if (!res)
 		res = &lres;
 
-	ret = of_address_to_resource(shmem, 0, res);
-	if (ret) {
-		dev_err(cdev, "failed to get SCMI %s shared memory\n", desc);
-		return IOMEM_ERR_PTR(ret);
+	if (cdev->of_node) {
+		struct device_node *shmem __free(device_node) =
+			of_parse_phandle(cdev->of_node, "shmem", idx);
+
+		if (!shmem)
+			return IOMEM_ERR_PTR(-ENODEV);
+
+		if (!of_device_is_compatible(shmem, "arm,scmi-shmem"))
+			return IOMEM_ERR_PTR(-ENXIO);
+
+		ret = of_address_to_resource(shmem, 0, res);
+		if (ret) {
+			dev_err(cdev, "failed to get SCMI %s shared memory\n",
+				desc);
+			return IOMEM_ERR_PTR(ret);
+		}
+
+		of_property_read_u32(shmem, "reg-io-width", &reg_io_width);
+	} else {
+		struct fwnode_handle *shmem_fwnode;
+		struct device *rdev;
+		struct platform_device *pdev;
+		const char *compat;
+
+		shmem_fwnode = fwnode_find_reference(cdev->fwnode, "shmem", idx);
+		if (IS_ERR_OR_NULL(shmem_fwnode))
+			return IOMEM_ERR_PTR(-ENODEV);
+
+		if (fwnode_property_present(shmem_fwnode, "compatible")) {
+			ret = fwnode_property_read_string(shmem_fwnode,
+				"compatible", &compat);
+			if (ret || strcmp(compat, "arm,scmi-shmem")) {
+				fwnode_handle_put(shmem_fwnode);
+				return IOMEM_ERR_PTR(-ENXIO);
+			}
+		}
+
+		rdev = bus_find_device_by_fwnode(&platform_bus_type,
+						 shmem_fwnode);
+		fwnode_handle_put(shmem_fwnode);
+		pdev = rdev ? to_platform_device(rdev) : NULL;
+		if (!pdev) {
+			dev_err(cdev, "failed to find SCMI %s shmem device\n",
+				desc);
+			if (rdev)
+				put_device(rdev);
+			return IOMEM_ERR_PTR(-ENODEV);
+		}
+
+		ret = platform_get_resource(pdev, IORESOURCE_MEM, 0) ?
+			0 : -EINVAL;
+		if (!ret) {
+			struct resource *pres;
+
+			pres = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+			*res = *pres;
+		}
+		put_device(rdev);
+		if (ret) {
+			dev_err(cdev, "failed to get SCMI %s shared memory\n",
+				desc);
+			return IOMEM_ERR_PTR(ret);
+		}
 	}
 
 	size = resource_size(res);
@@ -235,7 +381,6 @@ static void __iomem *shmem_setup_iomap(struct scmi_chan_info *cinfo,
 		return IOMEM_ERR_PTR(-EADDRNOTAVAIL);
 	}
 
-	of_property_read_u32(shmem, "reg-io-width", &reg_io_width);
 	switch (reg_io_width) {
 	case 4:
 		*ops = &shmem_io_ops32;

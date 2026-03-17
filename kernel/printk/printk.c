@@ -62,6 +62,10 @@
 #include "braille.h"
 #include "internal.h"
 
+#ifdef CONFIG_PLAT_PRINTK_EXT
+#include <linux/soc/cix/printk_ext.h>
+#endif
+
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -2283,6 +2287,8 @@ int vprintk_store(int facility, int level,
 	u16 text_len;
 	int ret = 0;
 	u64 ts_nsec;
+	char tmp_buf[100] = {'\0'};
+	u16 tmp_len = 0;
 
 	if (!printk_enter_irqsave(recursion_ptr, irqflags))
 		return 0;
@@ -2297,6 +2303,10 @@ int vprintk_store(int facility, int level,
 
 	caller_id = printk_caller_id();
 
+#ifdef CONFIG_PLAT_PRINTK_EXT
+	plat_log_store_add_time(tmp_buf, sizeof(tmp_buf), &tmp_len);
+#endif
+
 	/*
 	 * The sprintf needs to come first since the syslog prefix might be
 	 * passed in as a parameter. An extra byte must be reserved so that
@@ -2304,7 +2314,7 @@ int vprintk_store(int facility, int level,
 	 * terminating '\0', which is not counted by vsnprintf().
 	 */
 	va_copy(args2, args);
-	reserve_size = vsnprintf(&prefix_buf[0], sizeof(prefix_buf), fmt, args2) + 1;
+	reserve_size = vsnprintf(&prefix_buf[0], sizeof(prefix_buf), fmt, args2) + tmp_len + 1;
 	va_end(args2);
 
 	if (reserve_size > PRINTKRB_RECORD_MAX)
@@ -2345,6 +2355,7 @@ int vprintk_store(int facility, int level,
 		}
 	}
 
+
 	/*
 	 * Explicitly initialize the record before every prb_reserve() call.
 	 * prb_reserve_in_last() and prb_reserve() purposely invalidate the
@@ -2361,7 +2372,14 @@ int vprintk_store(int facility, int level,
 	}
 
 	/* fill message */
+#ifdef CONFIG_PLAT_PRINTK_EXT
+	memcpy(&r.text_buf[0], tmp_buf, tmp_len);
+	text_len = printk_sprint(&r.text_buf[0] + tmp_len, reserve_size - tmp_len, facility, &flags, fmt, args);
+	text_len += tmp_len;
+#else
 	text_len = printk_sprint(&r.text_buf[0], reserve_size, facility, &flags, fmt, args);
+#endif
+
 	if (trunc_msg_len)
 		memcpy(&r.text_buf[text_len], trunc_msg, trunc_msg_len);
 	r.info->text_len = text_len + trunc_msg_len;

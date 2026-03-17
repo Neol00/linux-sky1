@@ -403,6 +403,20 @@ static int cdnsp_ep0_std_request(struct cdnsp_device *pdev,
 	case USB_REQ_SET_ISOCH_DELAY:
 		ret = cdnsp_ep0_set_isoch_delay(pdev, ctrl);
 		break;
+	case USB_REQ_SET_INTERFACE:
+		/*
+		 * Add request into pending list to block sending status stage
+		 * by libcomposite.
+		 */
+		list_add_tail(&pdev->ep0_preq.list,
+			      &pdev->ep0_preq.pep->pending_list);
+
+		ret = cdnsp_ep0_delegate_req(pdev, ctrl);
+		if (ret == -EBUSY)
+			ret = 0;
+
+		list_del(&pdev->ep0_preq.list);
+		break;
 	default:
 		ret = cdnsp_ep0_delegate_req(pdev, ctrl);
 		break;
@@ -425,6 +439,7 @@ void cdnsp_setup_analyze(struct cdnsp_device *pdev)
 
 	if (pdev->gadget.state == USB_STATE_NOTATTACHED) {
 		dev_err(pdev->dev, "ERR: Setup detected in unattached state\n");
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -466,10 +481,15 @@ void cdnsp_setup_analyze(struct cdnsp_device *pdev)
 		pdev->ep0_expect_in = !!(ctrl->bRequestType & USB_DIR_IN);
 	}
 
+	pep->direction = !!(ctrl->bRequestType & USB_DIR_IN);
+
 	if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_STANDARD)
 		ret = cdnsp_ep0_std_request(pdev, ctrl);
 	else
 		ret = cdnsp_ep0_delegate_req(pdev, ctrl);
+
+	if (!len)
+		pdev->ep0_stage = CDNSP_STATUS_STAGE;
 
 	if (ret == USB_GADGET_DELAYED_STATUS) {
 		trace_cdnsp_ep0_status_stage("delayed");
@@ -478,6 +498,6 @@ void cdnsp_setup_analyze(struct cdnsp_device *pdev)
 out:
 	if (ret < 0)
 		cdnsp_ep0_stall(pdev);
-	else if (!len && pdev->ep0_stage != CDNSP_STATUS_STAGE)
+	else if (pdev->ep0_stage == CDNSP_STATUS_STAGE)
 		cdnsp_status_stage(pdev);
 }

@@ -15,6 +15,9 @@
 
 #include <dt-bindings/mfd/cros_ec.h>
 
+#define PWM_MAX_DUTY 100
+#define PWM_MAP_DUTY 257
+
 /**
  * struct cros_ec_pwm_device - Driver data for EC PWM
  *
@@ -63,7 +66,7 @@ static int cros_ec_pwm_set_duty(struct cros_ec_pwm_device *ec_pwm, u8 index,
 	msg->insize = 0;
 	msg->outsize = sizeof(*params);
 
-	params->duty = duty;
+	params->duty = ec_cpu_to_be16(min(duty / PWM_MAP_DUTY, PWM_MAX_DUTY));
 
 	if (ec_pwm->use_pwm_type) {
 		ret = cros_ec_dt_type_to_pwm_type(index, &params->pwm_type);
@@ -116,7 +119,7 @@ static int cros_ec_pwm_get_duty(struct cros_ec_device *ec, bool use_pwm_type, u8
 	if (ret < 0)
 		return ret;
 
-	return resp->duty;
+	return ec_be16_to_cpu(resp->duty);
 }
 
 static int cros_ec_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,

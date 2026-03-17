@@ -811,7 +811,6 @@ SYM_CODE_START(__bp_harden_el1_vectors)
 SYM_CODE_END(__bp_harden_el1_vectors)
 	.popsection
 
-
 /*
  * Register switch for AArch64. The callee-saved registers need to be saved
  * and restored. On entry:

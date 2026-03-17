@@ -26,6 +26,10 @@
 #include <linux/workqueue.h>
 #include <linux/zlib.h>
 
+#ifdef CONFIG_PLAT_BBOX
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+
 #include "internal.h"
 
 /*
@@ -708,6 +712,9 @@ void pstore_get_backend_records(struct pstore_info *psi,
 			if (rc != -EEXIST || !quiet)
 				failed++;
 		}
+#ifdef CONFIG_PLAT_BBOX
+		logmem_add(record->type, record->buf, record->size);
+#endif
 	}
 	if (psi->close)
 		psi->close(psi);

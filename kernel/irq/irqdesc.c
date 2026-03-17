@@ -19,6 +19,11 @@
 
 #include "internals.h"
 
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform_ap_hook.h>
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+
 /*
  * lockdep: we want to handle all irq_desc locks as a single lock-class:
  */
@@ -710,6 +715,7 @@ int generic_handle_irq_safe(unsigned int irq)
 	local_irq_save(flags);
 	ret = handle_irq_desc(irq_to_desc(irq));
 	local_irq_restore(flags);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(generic_handle_irq_safe);

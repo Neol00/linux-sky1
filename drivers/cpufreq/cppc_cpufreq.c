@@ -326,7 +326,7 @@ static unsigned int cppc_cpufreq_fast_switch(struct cpufreq_policy *policy,
 
 	if (ret) {
 		pr_debug("Failed to set target on CPU:%d. ret:%d\n",
-			 cpu, ret);
+		         cpu, ret);
 		return 0;
 	}
 
@@ -613,6 +613,121 @@ static void cppc_cpufreq_put_cpu_data(struct cpufreq_policy *policy)
 	policy->driver_data = NULL;
 }
 
+static int cppc_opp_init(struct cpufreq_policy *policy)
+{
+	struct acpi_object_list input;
+	union acpi_object params[2];
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
+	struct cppc_perf_caps *perf_caps;
+	struct cppc_cpudata *cpu_data;
+	struct device *cpu_dev;
+	acpi_handle handle;
+	union acpi_object *package;
+	u32 level_index = 0;
+	u32 *data;
+	u32 num_returned, num_remaining;
+	u32 total_opps = 0;
+	int i;
+
+	pr_debug("%s: Initializing OPPs for CPU:%d\n", __func__, policy->cpu);
+	cpu_data = policy->driver_data;
+	if (!cpu_data) {
+		pr_warn("No CPU data for CPU%d\n", policy->cpu);
+		cpufreq_cpu_put(policy);
+		return -ENODEV;
+	}
+
+	perf_caps = &cpu_data->perf_caps;
+	cpu_dev = get_cpu_device(policy->cpu);
+	handle = ACPI_HANDLE(cpu_dev);
+	if (!handle) {
+		pr_err("No ACPI handle for CPU:%d\n", cpu_dev->id);
+		return -EINVAL;
+	}
+
+	do {
+		params[0].type = ACPI_TYPE_INTEGER;
+		params[0].integer.value = cpu_data->perf_domain;
+		params[1].type = ACPI_TYPE_INTEGER;
+		params[1].integer.value = level_index;
+
+		input.count = 2;
+		input.pointer = params;
+
+		status = acpi_evaluate_object(handle, "\\_SB.PMMX.PEFG", &input, &buffer);
+		if (ACPI_FAILURE(status)) {
+			pr_err("Failed to call _PEFG: %s\n", acpi_format_exception(status));
+			goto OUT;
+		}
+
+		package = buffer.pointer;
+		if (!package || package->type != ACPI_TYPE_BUFFER) {
+			pr_err("%s: cpu:%d, no buffer returned\n", __func__, cpu_dev->id);
+			goto OUT;
+		}
+
+		data = (u32 *)package->buffer.pointer;
+
+		num_returned = data[1] & 0xfff;
+
+		pr_debug("%s: level_index=%u, returned=%u\n", __func__, level_index, num_returned);
+
+		if (num_returned == 0) {
+			pr_debug("%s: cpu:%d, no performance levels returned\n", __func__, cpu_dev->id);
+			break;
+		}
+
+		if (total_opps + num_returned > MAX_OPP_LEVELS) {
+			pr_warn("%s: cpu:%d, too many performance levels: %d > %d\n", __func__,
+				cpu_dev->id, total_opps + num_returned, MAX_OPP_LEVELS);
+			num_returned = MAX_OPP_LEVELS - total_opps;
+		}
+
+		for (i = 0; i < num_returned; i++) {
+			u32 index = 2 + i * 3;
+
+			if (total_opps >= MAX_OPP_LEVELS) {
+				pr_debug("%s: reached max OPP levels\n", __func__);
+				break;
+			}
+
+			cpu_data->opp[total_opps].perf = data[index];
+			cpu_data->opp[total_opps].power = data[index + 1];
+			cpu_data->opp[total_opps].freq = cppc_perf_to_khz(perf_caps,
+								cpu_data->opp[total_opps].perf);
+
+			pr_debug("%s: cpu:%d, level:%d, idx:%u, perf:%u, power:%u, freq:%u\n", __func__,
+				cpu_dev->id, total_opps, i,
+				cpu_data->opp[total_opps].perf,
+				cpu_data->opp[total_opps].power,
+				cpu_data->opp[total_opps].freq);
+
+			total_opps++;
+		}
+
+		level_index += num_returned;
+		num_remaining = (data[1] >> 16) & 0xffff;
+		pr_debug("%s: num_remaining=%u", __func__, num_remaining);
+	} while (num_remaining > 0);
+
+	cpu_data->opp_level_num = total_opps;
+
+	pr_debug("%s: cpu:%d, total OPP levels found: %d\n", __func__,
+		cpu_dev->id, cpu_data->opp_level_num);
+
+	if (cpu_data->opp_level_num == 0) {
+		pr_warn("%s: cpu:%d, no performance levels found\n", __func__, cpu_dev->id);
+		goto OUT;
+	}
+
+OUT:
+	if (buffer.pointer)
+		kfree(buffer.pointer);
+
+	return (cpu_data->opp_level_num > 0) ? 0 : -ENODATA;
+}
+
 static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 {
 	unsigned int cpu = policy->cpu;
@@ -689,6 +804,7 @@ static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	}
 
 	cppc_cpufreq_cpu_fie_init(policy);
+	cppc_opp_init(policy);
 	return 0;
 
 out:
@@ -746,6 +862,29 @@ static int cppc_perf_from_fbctrs(struct cppc_perf_fb_ctrs *fb_ctrs_t0,
 	return (reference_perf * delta_delivered) / delta_reference;
 }
 
+#ifdef CONFIG_ARCH_CIX
+/*
+ * On CIX platform, perf calculation is inaccurate from delivered performance
+ * counter and reference performance counter. We reuse the desired performance
+ * register to store the real performance calculated by the platform.
+ */
+ static unsigned int cppc_cpufreq_get_rate(unsigned int cpu)
+ {
+	struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
+	struct cppc_cpudata *cpu_data = policy->driver_data;
+	 struct cppc_perf_caps *perf_caps = &cpu_data->perf_caps;
+	u64 desired_perf;
+	int ret;
+
+	cpufreq_cpu_put(policy);
+
+	ret = cppc_get_desired_perf(cpu, &desired_perf);
+	if (ret < 0)
+		return -EIO;
+
+	return cppc_perf_to_khz(perf_caps, desired_perf);
+}
+#else
 static int cppc_get_perf_ctrs_sample(int cpu,
 				     struct cppc_perf_fb_ctrs *fb_ctrs_t0,
 				     struct cppc_perf_fb_ctrs *fb_ctrs_t1)
@@ -802,6 +941,7 @@ out_invalid_counters:
 
 	return cppc_perf_to_khz(&cpu_data->perf_caps, delivered_perf);
 }
+#endif
 
 static int cppc_cpufreq_set_boost(struct cpufreq_policy *policy, int state)
 {

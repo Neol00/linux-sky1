@@ -31,6 +31,9 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
+#ifdef CONFIG_PLAT_SDEI_EXCEPTIONS_TEST
+#include <linux/debugfs.h>
+#endif
 
 /*
  * The call to use to reach the firmware.

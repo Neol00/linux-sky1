@@ -13,6 +13,12 @@
 #include <linux/module.h>
 #include <linux/scmi_protocol.h>
 #include <asm/div64.h>
+#include <linux/acpi.h>
+
+#ifdef CONFIG_ARCH_CIX
+#include "./cix/clk.h"
+#include "./cix/acpi_clk.h"
+#endif
 
 #define NOT_ATOMIC	false
 #define ATOMIC		true
@@ -222,12 +228,23 @@ static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk,
 {
 	int ret;
 	unsigned long min_rate, max_rate;
+	char *unique_name;
+
+	/*
+	 * SCMI firmware may report duplicate clock names (e.g. all clocks
+	 * named "gicXclk"). Make names unique by appending the clock ID
+	 * to avoid -EEXIST from the clock framework.
+	 */
+	unique_name = devm_kasprintf(dev, GFP_KERNEL, "%s_%d",
+				     sclk->info->name, sclk->id);
+	if (!unique_name)
+		return -ENOMEM;
 
 	struct clk_init_data init = {
 		.flags = CLK_GET_RATE_NOCACHE,
 		.num_parents = sclk->info->num_parents,
 		.ops = scmi_ops,
-		.name = sclk->info->name,
+		.name = unique_name,
 		.parent_data = sclk->parent_data,
 	};
 
@@ -404,7 +421,7 @@ static int scmi_clocks_probe(struct scmi_device *sdev)
 	struct clk_hw **hws;
 	struct clk_hw_onecell_data *clk_data;
 	struct device *dev = &sdev->dev;
-	struct device_node *np = dev->of_node;
+	struct fwnode_handle *fwnode = dev->fwnode;
 	const struct scmi_handle *handle = sdev->handle;
 	struct scmi_protocol_handle *ph;
 	const struct clk_ops *scmi_clk_ops_db[SCMI_MAX_CLK_OPS] = {};
@@ -420,7 +437,7 @@ static int scmi_clocks_probe(struct scmi_device *sdev)
 
 	count = scmi_proto_clk_ops->count_get(ph);
 	if (count < 0) {
-		dev_err(dev, "%pOFn: invalid clock output count\n", np);
+		dev_err(dev, "%pFWn: invalid clock output count\n", fwnode);
 		return -EINVAL;
 	}
 
@@ -495,8 +512,28 @@ static int scmi_clocks_probe(struct scmi_device *sdev)
 		}
 	}
 
-	return devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get,
-					   clk_data);
+	err = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get,
+						clk_data);
+	if (err && !acpi_disabled)
+		err = 0; /* of_clk provider not needed for ACPI */
+	if (err)
+		return err;
+
+#ifdef CONFIG_ARCH_CIX
+	if (!acpi_disabled) {
+		void *driver_data = dev_get_drvdata(dev);
+
+		dev_set_drvdata(dev, clk_data);
+		err = cix_acpi_clks_parse(dev);
+
+		if (!IS_ERR_OR_NULL(driver_data))
+			dev_set_drvdata(dev, driver_data);
+	}
+
+	if (!err)
+		cix_uart_clocks_register();
+#endif
+	return err;
 }
 
 static const struct scmi_device_id scmi_id_table[] = {
@@ -510,7 +547,16 @@ static struct scmi_driver scmi_clocks_driver = {
 	.probe = scmi_clocks_probe,
 	.id_table = scmi_id_table,
 };
+
+#ifdef CONFIG_ARCH_CIX
+static int __init scmi_clocks_init(void)
+{
+	return scmi_register(&scmi_clocks_driver);
+}
+subsys_initcall_sync(scmi_clocks_init);
+#else
 module_scmi_driver(scmi_clocks_driver);
+#endif
 
 MODULE_AUTHOR("Sudeep Holla <sudeep.holla@arm.com>");
 MODULE_DESCRIPTION("ARM SCMI clock driver");

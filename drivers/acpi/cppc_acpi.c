@@ -524,6 +524,7 @@ int acpi_get_psd_map(unsigned int cpu, struct cppc_cpudata *cpu_data)
 	else if (pdomain->coord_type == DOMAIN_COORD_TYPE_SW_ANY)
 		cpu_data->shared_type = CPUFREQ_SHARED_TYPE_ANY;
 
+	cpu_data->perf_domain = pdomain->domain;
 	for_each_online_cpu(i) {
 		if (i == cpu)
 			continue;

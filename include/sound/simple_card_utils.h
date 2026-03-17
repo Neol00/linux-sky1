@@ -9,6 +9,7 @@
 #define __SIMPLE_CARD_UTILS_H
 
 #include <linux/clk.h>
+#include <linux/gpio/consumer.h>
 #include <sound/soc.h>
 
 #define simple_util_init_hp(card, sjack, prefix)		\
@@ -20,6 +21,12 @@ struct simple_util_tdm_width_map {
 	u8 sample_bits;
 	u8 slot_count;
 	u16 slot_width;
+};
+
+struct simple_util_jack {
+	struct snd_soc_jack jack;
+	struct snd_soc_jack_pin pin;
+	struct snd_soc_jack_gpio gpio;
 };
 
 struct simple_util_dai {
@@ -34,18 +41,20 @@ struct simple_util_dai {
 	bool clk_fixed;
 	struct simple_util_tdm_width_map *tdm_width_map;
 	int n_tdm_widths;
+
+	/* pa power control */
+	struct gpio_desc *pdb0_gpiod;
+	struct gpio_desc *pdb1_gpiod;
+	struct gpio_desc *pdb2_gpiod;
+	struct gpio_desc *pdb3_gpiod;
+	/* headset detect */
+	struct simple_util_jack hs_jack;
 };
 
 struct simple_util_data {
 	u32 convert_rate;
 	u32 convert_channels;
 	const char *convert_sample_format;
-};
-
-struct simple_util_jack {
-	struct snd_soc_jack jack;
-	struct snd_soc_jack_pin pin;
-	struct snd_soc_jack_gpio gpio;
 };
 
 struct prop_nums {
@@ -151,6 +160,12 @@ int simple_util_set_dailink_name(struct simple_util_priv *priv,
 				 const char *fmt, ...);
 int simple_util_parse_card_name(struct simple_util_priv *priv,
 				char *prefix);
+
+int simple_util_parse_pa(struct device *dev,
+			 struct device_node *np,
+			 struct simple_util_dai *simple_dai);
+void simple_util_parse_jack(struct device_node *np,
+			    struct simple_util_dai *simple_dai);
 
 int simple_util_parse_clk(struct device *dev,
 			  struct device_node *node,

@@ -48,6 +48,15 @@
 #include <asm/stacktrace.h>
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+#include <linux/soc/cix/dst_audio_timeout_error.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+#include <linux/soc/cix/dst_rcsu_gasket_error.h>
+#endif
 
 static bool __kprobes __check_eq(unsigned long pstate)
 {
@@ -214,6 +223,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 
 	console_verbose();
 	bust_spinlocks(1);
+
 	ret = __die(str, err, regs);
 
 	if (regs && kexec_should_crash(current))

@@ -74,6 +74,76 @@ static void cdns_exit_roles(struct cdns *cdns)
 	cdns_drd_exit(cdns);
 }
 
+static int cdnsp_platform_reset(struct device *dev)
+{
+	struct cdns *cdns = dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (cdns->pdata && cdns->pdata->platform_reset)
+		ret = cdns->pdata->platform_reset(dev);
+
+	return ret;
+}
+static int cdnsp_platform_u3_disable(struct device *dev)
+{
+	struct cdns *cdns = dev_get_drvdata(dev);
+	int ret = 0;
+
+	if (cdns->pdata && cdns->pdata->platform_u3_disable)
+		ret = cdns->pdata->platform_u3_disable(dev);
+
+	return ret;
+}
+
+static void cdns_top_start_role(struct work_struct *work)
+{
+	struct cdns *cdns = work_to_cdns(work);
+	int ret;
+
+	dev_info(cdns->dev, "usb role switch work queue start\n");
+	pm_runtime_get_sync(cdns->dev);
+
+	mutex_lock(&cdns->role_mutex);
+	if (cdns->d3) {
+		dev_err(cdns->dev, "controller have enter d3\n");
+		return;
+	}
+	if (cdns->new_role == cdns->role){
+		dev_info(cdns->dev, "have set to %d, exit\n", cdns->new_role);
+		mutex_unlock(&cdns->role_mutex);
+		goto pm_out;
+	}
+
+	mutex_lock(&cdns->plat_reset_mutex);
+	cdns->plat_reset_complete = false;
+	mutex_unlock(&cdns->plat_reset_mutex);
+
+	cdns_role_stop(cdns);
+	mutex_lock(&cdns->plat_reset_mutex);
+	if (cdns->new_role != USB_ROLE_NONE)
+		ret = cdnsp_platform_reset(cdns->dev);
+	if (ret) {
+		mutex_unlock(&cdns->plat_reset_mutex);
+		mutex_unlock(&cdns->role_mutex);
+		dev_err(cdns->dev, "failed to platform reset and set role %d\n", cdns->new_role);
+		cdns->died = true;
+		goto pm_out;
+	}
+	if (cdns->u3_disable)
+		cdnsp_platform_u3_disable(cdns->dev);
+	cdns->plat_reset_complete = true;
+	mutex_unlock(&cdns->plat_reset_mutex);
+	if (cdns->version == CDNSP_CONTROLLER_V2)
+		writel(1, &cdns->otg_cdnsp_regs->simulate);
+	ret = cdns_role_start(cdns, cdns->new_role);
+	mutex_unlock(&cdns->role_mutex);
+	if (ret)
+		dev_err(cdns->dev, "set role %d has failed\n", cdns->new_role);
+pm_out:
+	dev_info(cdns->dev, "usb role switch work queue end\n");
+	pm_runtime_put_sync(cdns->dev);
+}
+
 /**
  * cdns_core_init_role - initialize role of operation
  * @cdns: Pointer to cdns structure
@@ -178,6 +248,7 @@ static int cdns_core_init_role(struct cdns *cdns)
 
 	switch (cdns->dr_mode) {
 	case USB_DR_MODE_OTG:
+		INIT_WORK(&cdns->drd_work, cdns_top_start_role);
 		ret = cdns_hw_role_switch(cdns);
 		if (ret)
 			goto err;
@@ -246,12 +317,15 @@ static enum usb_role cdns_hw_role_state_machine(struct cdns *cdns)
 			role = USB_ROLE_DEVICE;
 		break;
 	case USB_ROLE_HOST: /* from HOST, we can only change to NONE */
+	case USB_ROLE_HOST_20:
 		if (id)
 			role = USB_ROLE_NONE;
 		break;
 	case USB_ROLE_DEVICE: /* from GADGET, we can only change to NONE*/
 		if (!vbus)
 			role = USB_ROLE_NONE;
+		break;
+	default: /* USB_ROLE_HOST_20 */
 		break;
 	}
 
@@ -360,10 +434,24 @@ static int cdns_role_set(struct usb_role_switch *sw, enum usb_role role)
 	struct cdns *cdns = usb_role_switch_get_drvdata(sw);
 	int ret = 0;
 
-	pm_runtime_get_sync(cdns->dev);
+	dev_info(cdns->dev, "cur role:%d, new role: %d\n", cdns->role, role);
 
-	if (cdns->role == role)
-		goto pm_put;
+	if (role ==USB_ROLE_HOST_20 ) {
+		mutex_lock(&cdns->plat_reset_mutex);
+		if (cdns->plat_reset_complete == true) {
+			cdnsp_platform_u3_disable(cdns->dev);
+		}
+		dev_info(cdns->dev, "set disable u3 port flag\n");
+		cdns->u3_disable = true;
+		mutex_unlock(&cdns->plat_reset_mutex);
+	}
+
+	if (role == USB_ROLE_HOST || role == USB_ROLE_NONE)
+		cdns->u3_disable = false;
+
+	if (role == USB_ROLE_HOST_20)
+		role = USB_ROLE_HOST;
+	cdns->new_role = role;
 
 	if (cdns->dr_mode == USB_DR_MODE_HOST) {
 		switch (role) {
@@ -371,7 +459,7 @@ static int cdns_role_set(struct usb_role_switch *sw, enum usb_role role)
 		case USB_ROLE_HOST:
 			break;
 		default:
-			goto pm_put;
+			goto out;
 		}
 	}
 
@@ -381,17 +469,14 @@ static int cdns_role_set(struct usb_role_switch *sw, enum usb_role role)
 		case USB_ROLE_DEVICE:
 			break;
 		default:
-			goto pm_put;
+			goto out;
 		}
 	}
 
-	cdns_role_stop(cdns);
-	ret = cdns_role_start(cdns, role);
-	if (ret)
-		dev_err(cdns->dev, "set role %d has failed\n", role);
+	queue_work(system_freezable_wq, &cdns->drd_work);
+	dev_info(cdns->dev, "usb set role end\n");
 
-pm_put:
-	pm_runtime_put_sync(cdns->dev);
+out:
 	return ret;
 }
 
@@ -436,6 +521,8 @@ int cdns_init(struct cdns *cdns)
 	}
 
 	mutex_init(&cdns->mutex);
+	mutex_init(&cdns->role_mutex);
+	mutex_init(&cdns->plat_reset_mutex);
 
 	if (device_property_read_bool(dev, "usb-role-switch")) {
 		struct usb_role_switch_desc sw_desc = { };
@@ -452,6 +539,11 @@ int cdns_init(struct cdns *cdns)
 			return PTR_ERR(cdns->role_sw);
 		}
 	}
+
+
+	/* If there is no vbus input at platfrom, set SW vbus override bit */
+	if (device_property_read_bool(dev, "cdnsp-vbus-override"))
+		cdns->vbus_override = true;
 
 	if (cdns->wakeup_irq) {
 		ret = devm_request_irq(cdns->dev, cdns->wakeup_irq,

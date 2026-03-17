@@ -32,3 +32,19 @@ config RFKILL_GPIO
 	help
 	  If you say yes here you get support of a generic gpio RFKILL
 	  driver.
+
+config RFKILL_WLAN
+	tristate "WLAN RFKILL driver"
+	depends on ARCH_CIX
+	default n
+	help
+	  If you say yes here you get support of WLAN RFKILL
+	  driver.
+
+config RFKILL_BT
+	tristate "BT RFKILL driver"
+	depends on ARCH_CIX
+	default n
+	help
+	If you say yes here you get support of BT RFKILL
+	driver.

@@ -523,6 +523,12 @@ int suspend_devices_and_enter(suspend_state_t state)
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
 		pr_err("Some devices failed to suspend, or early wake event detected\n");
+#ifdef CONFIG_PLAT_BBOX
+		if (suspend_warning_check() == false)
+			rdr_system_error(MODID_AP_SUSPEND_DEVICE_FAIL, 0, 0);
+		else
+			suspend_warning_clear();
+#endif
 		goto Recover_platform;
 	}
 	suspend_test_finish("suspend devices");

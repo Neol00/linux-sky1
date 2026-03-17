@@ -141,19 +141,19 @@ static int cros_ec_pkt_xfer_i2c(struct cros_ec_device *ec_dev,
 		}
 	}
 
-	if (ec_response_i2c->packet_length < sizeof(struct ec_host_response)) {
+	if (ec_be32_to_cpu(ec_response_i2c->packet_length) < sizeof(struct ec_host_response)) {
 		dev_err(ec_dev->dev,
 			"response of %u bytes too short; not a full header\n",
-			ec_response_i2c->packet_length);
+			ec_be32_to_cpu(ec_response_i2c->packet_length));
 		ret = -EBADMSG;
 		goto done;
 	}
 
-	if (msg->insize < ec_response->data_len) {
+	if (msg->insize < ec_be16_to_cpu(ec_response->data_len)) {
 		dev_err(ec_dev->dev,
 			"response data size is too large: expected %u, got %u\n",
 			msg->insize,
-			ec_response->data_len);
+			ec_be16_to_cpu(ec_response->data_len));
 		ret = -EMSGSIZE;
 		goto done;
 	}
@@ -165,8 +165,8 @@ static int cros_ec_pkt_xfer_i2c(struct cros_ec_device *ec_dev,
 
 	memcpy(msg->data,
 	       in_buf + response_header_size,
-	       ec_response->data_len);
-	for (i = 0; i < ec_response->data_len; i++)
+	       ec_be16_to_cpu(ec_response->data_len));
+	for (i = 0; i < ec_be16_to_cpu(ec_response->data_len); i++)
 		sum += msg->data[i];
 
 	/* All bytes should sum to zero */
@@ -176,7 +176,7 @@ static int cros_ec_pkt_xfer_i2c(struct cros_ec_device *ec_dev,
 		goto done;
 	}
 
-	ret = ec_response->data_len;
+	ret = ec_be16_to_cpu(ec_response->data_len);
 
 done:
 	if (msg->command == EC_CMD_REBOOT_EC)
@@ -336,7 +336,11 @@ static int cros_ec_i2c_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops cros_ec_i2c_pm_ops = {
+#ifdef CONFIG_CIX_EC
+	SYSTEM_SLEEP_PM_OPS(cros_ec_i2c_suspend, cros_ec_i2c_resume)
+#else
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(cros_ec_i2c_suspend, cros_ec_i2c_resume)
+#endif
 };
 
 #ifdef CONFIG_OF

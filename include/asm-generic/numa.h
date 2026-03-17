@@ -4,7 +4,7 @@
 
 #ifdef CONFIG_NUMA
 
-#define NR_NODE_MEMBLKS		(MAX_NUMNODES * 2)
+#define NR_NODE_MEMBLKS		(MAX_NUMNODES * 4)
 
 int __node_distance(int from, int to);
 #define node_distance(a, b) __node_distance(a, b)

@@ -9,4 +9,6 @@ obj-$(CONFIG_PCIE_CADENCE_EP) += pcie-cadence-ep-mod.o
 obj-$(CONFIG_PCIE_CADENCE_PLAT) += pcie-cadence-plat.o
 obj-$(CONFIG_PCI_J721E) += pci-j721e.o
 obj-$(CONFIG_PCIE_SG2042_HOST) += pcie-sg2042.o
+pcie-sky1-y := pci-sky1.o pci-sky1-debugfs.o
+obj-$(CONFIG_PCI_SKY1) += pcie-sky1.o
 obj-$(CONFIG_PCI_SKY1_HOST) += pci-sky1.o

@@ -950,6 +950,10 @@ static int rpm_resume(struct device *dev, int rpmflags)
 	}
 	wake_up_all(&dev->power.wait_queue);
 
+#ifdef CONFIG_ARCH_CIX
+	if (retval  == -ETIMEDOUT || retval  == -EAGAIN)
+		dev->power.runtime_error = 0;
+#endif
 	if (retval >= 0)
 		rpm_idle(dev, RPM_ASYNC);
 

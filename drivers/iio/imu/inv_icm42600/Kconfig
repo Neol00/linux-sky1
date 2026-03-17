@@ -28,3 +28,16 @@ config INV_ICM42600_SPI
 
 	  This driver can be built as a module. The module will be called
 	  inv-icm42600-spi.
+
+config INV_ICM42600_SPI_REGMAP_REF
+	tristate "InvenSense ICM-426xx SPI driver that bypass regmap"
+	depends on SPI_MASTER
+	select INV_ICM42600
+	select INV_ICM42600_SPI
+	select REGMAP_SPI
+	help
+	  This driver redefine invenSense ICM-426xx SPI write/read interface
+	  to adapt the cadence spi control driver.
+
+	  This driver can be built as a module. The module will be called
+	  cix_regmap_ref_spi.

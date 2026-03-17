@@ -442,6 +442,7 @@ struct regulator_desc {
 	unsigned int poll_enabled_time;
 
 	unsigned int (*of_map_mode)(unsigned int mode);
+	unsigned int (*fwnode_map_mode)(unsigned int mode);
 };
 
 /**
@@ -465,6 +466,7 @@ struct regulator_config {
 	const struct regulator_init_data *init_data;
 	void *driver_data;
 	struct device_node *of_node;
+	struct fwnode_handle *fwnode;
 	struct regmap *regmap;
 
 	struct gpio_desc *ena_gpiod;

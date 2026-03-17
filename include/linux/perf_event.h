@@ -1519,6 +1519,7 @@ is_default_overflow_handler(struct perf_event *event)
 		return true;
 	if (unlikely(overflow_handler == perf_event_output_backward))
 		return true;
+
 	return false;
 }
 

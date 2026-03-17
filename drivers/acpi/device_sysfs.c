@@ -121,12 +121,12 @@ static void acpi_hide_nondev_subnodes(struct acpi_device_data *data)
 }
 
 /**
- * create_pnp_modalias - Create hid/cid(s) string for modalias and uevent
+ * create_pnp_modalias - Create hid/uid or hid/cid(s) string for modalias and uevent
  * @acpi_dev: ACPI device object.
  * @modalias: Buffer to print into.
  * @size: Size of the buffer.
  *
- * Creates hid/cid(s) string needed for modalias and uevent
+ * Creates hid/uid or hid/cid(s) string needed for modalias and uevent
  * e.g. on a device with hid:IBM0001 and cid:ACPI0001 you get:
  * char *modalias: "acpi:IBM0001:ACPI0001"
  * Return: 0: no _HID and no _CID
@@ -139,6 +139,9 @@ static int create_pnp_modalias(const struct acpi_device *acpi_dev, char *modalia
 	int len;
 	int count;
 	struct acpi_hardware_id *id;
+	struct acpi_device_info *info;
+	acpi_status status;
+	u16 acpi_valid=0;
 
 	/* Avoid unnecessarily loading modules for non present devices. */
 	if (!acpi_device_is_present(acpi_dev))
@@ -163,19 +166,48 @@ static int create_pnp_modalias(const struct acpi_device *acpi_dev, char *modalia
 
 	size -= len;
 
-	list_for_each_entry(id, &acpi_dev->pnp.ids, list) {
-		if (!strcmp(id->id, ACPI_DT_NAMESPACE_HID))
-			continue;
-
-		count = snprintf(&modalias[len], size, "%s:", id->id);
+	status=acpi_get_object_info(acpi_dev->handle, &info);
+	if(ACPI_SUCCESS(status)){
+		acpi_valid=info->valid;
+		ACPI_FREE(info);
+	}
+	if (acpi_valid & ACPI_VALID_UID) {
+		count = snprintf(&modalias[len], size, "%s:%s",
+				 acpi_device_hid((struct acpi_device*)acpi_dev),
+				 acpi_dev->pnp.unique_id);
+		if (count < 0)
+			return -EINVAL;
 
 		if (count >= size)
 			return -ENOMEM;
 
 		len += count;
 		size -= count;
+	} else {
+		list_for_each_entry(id, &acpi_dev->pnp.ids, list) {
+			if (!strcmp(id->id, ACPI_DT_NAMESPACE_HID))
+				continue;
+
+			count = snprintf(&modalias[len], size, "%s:", id->id);
+			if (count < 0)
+				return -EINVAL;
+
+			if (count >= size)
+				return -ENOMEM;
+
+			len += count;
+			size -= count;
+		}
+		/* If acpi device has _CID objects, here should trim the suffix colon.
+		* such as, acpi:IBM0001:ACPI0001: ---> acpi:IBM0001:ACPI0001
+		*/
+
+		if ((acpi_valid & ACPI_VALID_CID)) {
+			len--;
+		}
 	}
 
+	modalias[len] = '\0';
 	return len;
 }
 

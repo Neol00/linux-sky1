@@ -27,6 +27,7 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/module.h>
+#include <linux/acpi.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/regulator.h>
@@ -5834,7 +5835,6 @@ static void regulator_resolve_coupling(struct regulator_dev *rdev)
 		/* already resolved */
 		if (c_desc->coupled_rdevs[i])
 			continue;
-
 		c_rdev = of_parse_coupled_regulator(rdev, i - 1);
 
 		if (!c_rdev)
@@ -5908,10 +5908,7 @@ static int regulator_init_coupling(struct regulator_dev *rdev)
 	struct regulator_dev **coupled;
 	int err, n_phandles;
 
-	if (!IS_ENABLED(CONFIG_OF))
-		n_phandles = 0;
-	else
-		n_phandles = of_get_n_coupled(rdev);
+	n_phandles = of_get_n_coupled(rdev);
 
 	coupled = kzalloc_objs(*coupled, n_phandles + 1);
 	if (!coupled)
@@ -6084,6 +6081,7 @@ regulator_register(struct device *dev,
 	if (!init_data) {
 		init_data = config->init_data;
 		rdev->dev.of_node = of_node_get(config->of_node);
+		rdev->dev.fwnode = fwnode_handle_get(config->fwnode);
 	}
 
 	ww_mutex_init(&rdev->mutex, &regulator_ww_class);

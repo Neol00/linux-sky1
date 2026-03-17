@@ -137,6 +137,15 @@ struct cppc_perf_fb_ctrs {
 	u64 wraparound_time;
 };
 
+struct cppc_opp {
+	u32 perf;
+	u32 power;
+	u32 freq; /* in KHz */
+	u32 level_index;
+};
+
+#define MAX_OPP_LEVELS	16
+
 /* Per CPU container for runtime CPPC management. */
 struct cppc_cpudata {
 	struct cppc_perf_caps perf_caps;
@@ -144,6 +153,9 @@ struct cppc_cpudata {
 	struct cppc_perf_fb_ctrs perf_fb_ctrs;
 	unsigned int shared_type;
 	cpumask_var_t shared_cpu_map;
+	struct cppc_opp opp[MAX_OPP_LEVELS];
+	unsigned int opp_level_num;
+	unsigned int perf_domain;
 };
 
 #ifdef CONFIG_ACPI_CPPC_LIB

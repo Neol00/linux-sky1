@@ -170,6 +170,15 @@ static int simple_parse_node(struct simple_util_priv *priv,
 		goto end;
 
 	ret = simple_util_parse_tdm(np, dai);
+	if (ret)
+		goto end;
+
+	ret = simple_util_parse_pa(dev, np, dai);
+	if (ret)
+		goto end;
+
+	simple_util_parse_jack(np, dai);
+
 end:
 	return simple_ret(priv, ret);
 }

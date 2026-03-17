@@ -545,6 +545,14 @@ static int d350_probe(struct platform_device *pdev)
 
 	reg = readl_relaxed(base + DMAINFO + DMA_BUILDCFG0);
 	nchan = FIELD_GET(DMA_CFG_NUM_CHANNELS, reg) + 1;
+
+	ret = platform_irq_count(pdev);
+	if (ret >= 0 && ret < nchan) {
+		dev_warn(dev, "Limiting channels from %d to %d (IRQs)\n",
+			 nchan, ret);
+		nchan = ret;
+	}
+
 	dw = 1 << FIELD_GET(DMA_CFG_DATA_WIDTH, reg);
 	aw = FIELD_GET(DMA_CFG_ADDR_WIDTH, reg) + 1;
 

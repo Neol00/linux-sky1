@@ -24,6 +24,7 @@
 
 #include "internal.h"
 #include "ram_internal.h"
+#include "linux/fwnode.h"
 
 #define RAMOOPS_KERNMSG_HDR "===="
 #define MIN_MEM_SIZE 4096UL
@@ -615,15 +616,15 @@ static int ramoops_init_prz(const char *name,
 	return 0;
 }
 
-/* Read a u32 from a dt property and make sure it's safe for an int. */
-static int ramoops_parse_dt_u32(struct platform_device *pdev,
-				const char *propname,
-				u32 default_value, u32 *value)
+/* Read a u32 from a dt/acpi property and make sure it's safe for an int. */
+static int ramoops_parse_u32(struct platform_device *pdev,
+			     const char *propname,
+			     u32 default_value, u32 *value)
 {
 	u32 val32 = 0;
 	int ret;
 
-	ret = of_property_read_u32(pdev->dev.of_node, propname, &val32);
+	ret = device_property_read_u32(&pdev->dev, propname, &val32);
 	if (ret == -EINVAL) {
 		/* field is missing, use default value. */
 		val32 = default_value;
@@ -643,8 +644,8 @@ static int ramoops_parse_dt_u32(struct platform_device *pdev,
 	return 0;
 }
 
-static int ramoops_parse_dt(struct platform_device *pdev,
-			    struct ramoops_platform_data *pdata)
+static int ramoops_parse(struct platform_device *pdev,
+			 struct ramoops_platform_data *pdata)
 {
 	struct device_node *of_node = pdev->dev.of_node;
 	struct device_node *parent_node;
@@ -667,19 +668,19 @@ static int ramoops_parse_dt(struct platform_device *pdev,
 	 * Setting "unbuffered" is deprecated and will be ignored if
 	 * "mem_type" is also specified.
 	 */
-	pdata->mem_type = of_property_read_bool(of_node, "unbuffered");
+	pdata->mem_type = device_property_read_bool(&pdev->dev, "unbuffered");
 	/*
 	 * Setting "no-dump-oops" is deprecated and will be ignored if
 	 * "max_reason" is also specified.
 	 */
-	if (of_property_read_bool(of_node, "no-dump-oops"))
+	if (device_property_read_bool(&pdev->dev, "no-dump-oops"))
 		pdata->max_reason = KMSG_DUMP_PANIC;
 	else
 		pdata->max_reason = KMSG_DUMP_OOPS;
 
 #define parse_u32(name, field, default_value) {				\
-		ret = ramoops_parse_dt_u32(pdev, name, default_value,	\
-					    &value);			\
+		ret = ramoops_parse_u32(pdev, name, default_value,	\
+					&value);			\
 		if (ret < 0)						\
 			return ret;					\
 		field = value;						\
@@ -738,11 +739,11 @@ static int ramoops_probe(struct platform_device *pdev)
 		goto fail_out;
 	}
 
-	if (dev_of_node(dev) && !pdata) {
+	if (dev_fwnode(dev) && !pdata) {
 		pdata = &pdata_local;
 		memset(pdata, 0, sizeof(*pdata));
 
-		err = ramoops_parse_dt(pdev, pdata);
+		err = ramoops_parse(pdev, pdata);
 		if (err < 0)
 			goto fail_out;
 	}

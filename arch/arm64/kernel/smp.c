@@ -24,6 +24,7 @@
 #include <linux/smp.h>
 #include <linux/seq_file.h>
 #include <linux/irq.h>
+#include <linux/nmi.h>
 #include <linux/irqchip/arm-gic-v3.h>
 #include <linux/percpu.h>
 #include <linux/clockchips.h>
@@ -920,21 +921,7 @@ static void arm64_send_ipi(const cpumask_t *mask, unsigned int nr)
 			__ipi_send_single(get_ipi_desc(cpu, nr), cpu);
 }
 
-static void arm64_backtrace_ipi(cpumask_t *mask)
-{
-	arm64_send_ipi(mask, IPI_CPU_BACKTRACE);
-}
 
-void arch_trigger_cpumask_backtrace(const cpumask_t *mask, int exclude_cpu)
-{
-	/*
-	 * NOTE: though nmi_trigger_cpumask_backtrace() has "nmi_" in the name,
-	 * nothing about it truly needs to be implemented using an NMI, it's
-	 * just that it's _allowed_ to work with NMIs. If ipi_should_be_nmi()
-	 * returned false our backtrace attempt will just use a regular IPI.
-	 */
-	nmi_trigger_cpumask_backtrace(mask, exclude_cpu, arm64_backtrace_ipi);
-}
 
 #ifdef CONFIG_KGDB
 void kgdb_roundup_cpus(void)
@@ -1308,4 +1295,14 @@ bool cpus_are_stuck_in_kernel(void)
 
 	return !!cpus_stuck_in_kernel || smp_spin_tables ||
 		is_protected_kvm_enabled();
+}
+
+static void raise_nmi(cpumask_t *mask)
+{
+	smp_cross_call(mask, IPI_CPU_BACKTRACE);
+}
+
+void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
+{
+	nmi_trigger_cpumask_backtrace(mask, exclude_self, raise_nmi);
 }

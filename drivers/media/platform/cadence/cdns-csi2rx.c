@@ -25,15 +25,35 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
+#include "cdns-csi2rx.h"
+
+#define CSI2RX_CIX_ENABLE 1
+
 #define CSI2RX_DEVICE_CFG_REG			0x000
 
 #define CSI2RX_SOFT_RESET_REG			0x004
-#define CSI2RX_SOFT_RESET_PROTOCOL			BIT(1)
-#define CSI2RX_SOFT_RESET_FRONT				BIT(0)
+#if CSI2RX_CIX_ENABLE
+#define CSI2RX_SOFT_RESET				BIT(0)
+#else
+#define CSI2RX_SOFT_RESET_PROTOCOL		BIT(1)
+#define CSI2RX_SOFT_RESET_FRONT			BIT(0)
+#endif
 
 #define CSI2RX_STATIC_CFG_REG			0x008
 #define CSI2RX_STATIC_CFG_DLANE_MAP(llane, plane)	((plane) << (16 + (llane) * 4))
-#define CSI2RX_STATIC_CFG_LANES_MASK			GENMASK(11, 8)
+#define CSI2RX_STATIC_CFG_LANES_MASK	GENMASK(11, 8)
+
+#if CSI2RX_CIX_ENABLE
+#define CSI2RX_STATIC_CFG_LANE_NB		4
+#define CSI2RX_STATIC_CFG_LRTE_EPD		3
+#define CSI2RX_STATIC_CFG_ENABLE_LRTE	2
+
+#define CSI2RX_ENABLE_LRTE				0x1
+#define CSI2RX_DISABLE_LRTE				0x0
+
+#define CSI2RX_LRTE_EPD_OPTION1			0x0
+#define CSI2RX_LRTE_EPD_OPTION2			0x1
+#endif
 
 #define CSI2RX_DPHY_LANE_CTRL_REG		0x40
 #define CSI2RX_DPHY_CL_RST			BIT(16)
@@ -235,11 +255,15 @@ static const struct csi2rx_fmt *csi2rx_get_fmt_by_code(u32 code)
 	return NULL;
 }
 
-static inline
+static const char *cix_csi_clk_names[4] = {
+	"csi_p0clk", "csi_p1clk", "csi_p2clk", "csi_p3clk"
+};
+
 struct csi2rx_priv *v4l2_subdev_to_csi2rx(struct v4l2_subdev *subdev)
 {
 	return container_of(subdev, struct csi2rx_priv, subdev);
 }
+EXPORT_SYMBOL(v4l2_subdev_to_csi2rx);
 
 static void csi2rx_reset(struct csi2rx_priv *csi2rx)
 {
@@ -306,7 +330,7 @@ static int csi2rx_configure_ext_dphy(struct csi2rx_priv *csi2rx)
 	return 0;
 }
 
-static int csi2rx_start(struct csi2rx_priv *csi2rx)
+int csi2rx_start(struct csi2rx_priv *csi2rx)
 {
 	unsigned int i;
 	unsigned long lanes_used = 0;
@@ -341,7 +365,7 @@ static int csi2rx_start(struct csi2rx_priv *csi2rx)
 		set_bit(idx, &lanes_used);
 		reg |= CSI2RX_STATIC_CFG_DLANE_MAP(i, i + 1);
 	}
-
+#endif
 	writel(reg, csi2rx->base + CSI2RX_STATIC_CFG_REG);
 
 	/* Enable DPHY clk and data lanes. */
@@ -373,9 +397,6 @@ static int csi2rx_start(struct csi2rx_priv *csi2rx)
 	 * hence the reference counting.
 	 */
 	for (i = 0; i < csi2rx->max_streams; i++) {
-		ret = clk_prepare_enable(csi2rx->pixel_clk[i]);
-		if (ret)
-			goto err_disable_pixclk;
 
 		reset_control_deassert(csi2rx->pixel_rst[i]);
 
@@ -426,8 +447,9 @@ err_disable_pclk:
 
 	return ret;
 }
+EXPORT_SYMBOL(csi2rx_start);
 
-static void csi2rx_stop(struct csi2rx_priv *csi2rx)
+void csi2rx_stop(struct csi2rx_priv *csi2rx)
 {
 	unsigned int i;
 	u32 val;
@@ -469,6 +491,7 @@ static void csi2rx_stop(struct csi2rx_priv *csi2rx)
 			dev_warn(csi2rx->dev, "Couldn't power off DPHY\n");
 	}
 }
+EXPORT_SYMBOL(csi2rx_stop);
 
 static int csi2rx_log_status(struct v4l2_subdev *sd)
 {
@@ -668,28 +691,60 @@ static const struct v4l2_async_notifier_operations csi2rx_notifier_ops = {
 	.bound		= csi2rx_async_bound,
 };
 
-static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
+int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 				struct platform_device *pdev)
 {
 	unsigned char i;
-	u32 dev_cfg;
+	u32 dev_cfg = 4;
+#if !CSI2RX_CIX_ENABLE
 	int ret;
-
+#endif
 	csi2rx->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(csi2rx->base))
 		return PTR_ERR(csi2rx->base);
 
-	csi2rx->sys_clk = devm_clk_get(&pdev->dev, "sys_clk");
+	dev_info(&pdev->dev, "%s:%d  %d \n",__FUNCTION__,__LINE__,csi2rx->id);
+
+	csi2rx->sys_clk = devm_clk_get_optional(&pdev->dev, "csi_sclk");
 	if (IS_ERR(csi2rx->sys_clk)) {
 		dev_err(&pdev->dev, "Couldn't get sys clock\n");
 		return PTR_ERR(csi2rx->sys_clk);
 	}
 
-	csi2rx->p_clk = devm_clk_get(&pdev->dev, "p_clk");
+	csi2rx->p_clk = devm_clk_get_optional(&pdev->dev, "csi_pclk");
 	if (IS_ERR(csi2rx->p_clk)) {
-		dev_err(&pdev->dev, "Couldn't get P clock\n");
+		dev_err(&pdev->dev, "Couldn't get csi_pclk clock\n");
 		return PTR_ERR(csi2rx->p_clk);
 	}
+	if((csi2rx->id == 0) || (csi2rx->id == 2))
+	{
+		for(i = 0;i < 4;i++)
+		{
+			csi2rx->pixel_clk[i] = devm_clk_get_optional(&pdev->dev, cix_csi_clk_names[i]);
+			if (IS_ERR(csi2rx->p_clk)) {
+				dev_err(&pdev->dev, "Couldn't get %s clock\n",cix_csi_clk_names[i]);
+				return PTR_ERR(csi2rx->p_clk);
+			}
+		}
+	}
+	else
+	{
+		csi2rx->pixel_clk[0] = devm_clk_get_optional(&pdev->dev, cix_csi_clk_names[0]);
+		if (IS_ERR(csi2rx->p_clk)) {
+			dev_err(&pdev->dev, "Couldn't get %s clock\n",cix_csi_clk_names[0]);
+			return PTR_ERR(csi2rx->p_clk);
+		}
+	}
+
+	csi2rx->csi_reset = devm_reset_control_get(&pdev->dev, "csi_reset");
+	if (IS_ERR(csi2rx->csi_reset)) {
+		if (PTR_ERR(csi2rx->csi_reset) != -EPROBE_DEFER) {
+			dev_err(&pdev->dev, "Failed to get csi	reset control\n");
+			return PTR_ERR(csi2rx->csi_reset);
+		}
+	}
+
+#if !CSI2RX_CIX_ENABLE
 
 	csi2rx->sys_rst = devm_reset_control_get_optional_exclusive(&pdev->dev,
 								    "sys");
@@ -715,6 +770,7 @@ static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 
 	dev_cfg = readl(csi2rx->base + CSI2RX_DEVICE_CFG_REG);
 	clk_disable_unprepare(csi2rx->p_clk);
+#endif
 
 	csi2rx->max_lanes = dev_cfg & 7;
 	if (csi2rx->max_lanes > CSI2RX_LANES_MAX) {
@@ -742,7 +798,8 @@ static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 	}
 
 	for (i = 0; i < csi2rx->max_streams; i++) {
-		char name[16];
+	#if !CSI2RX_CIX_ENABLE
+		char clk_name[16];
 
 		snprintf(name, sizeof(name), "pixel_if%u_clk", i);
 		csi2rx->pixel_clk[i] = devm_clk_get(&pdev->dev, name);
@@ -757,19 +814,23 @@ static int csi2rx_get_resources(struct csi2rx_priv *csi2rx,
 								  name);
 		if (IS_ERR(csi2rx->pixel_rst[i]))
 			return PTR_ERR(csi2rx->pixel_rst[i]);
+	#endif
 	}
 
 	return 0;
 }
+EXPORT_SYMBOL(csi2rx_get_resources);
 
-static int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
+int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
 {
-	struct v4l2_fwnode_endpoint v4l2_ep = { .bus_type = 0 };
 	struct v4l2_async_connection *asd;
-	struct fwnode_handle *fwh;
-	struct device_node *ep;
+	struct fwnode_handle *fwh = NULL;
 	int ret;
 
+#if !CSI2RX_CIX_ENABLE
+	struct device_node *ep;
+
+	struct v4l2_fwnode_endpoint v4l2_ep = { .bus_type = 0 };
 	ep = of_graph_get_endpoint_by_regs(csi2rx->dev->of_node, 0, 0);
 	if (!ep)
 		return -EINVAL;
@@ -800,10 +861,11 @@ static int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
 	}
 
 	v4l2_async_subdev_nf_init(&csi2rx->notifier, &csi2rx->subdev);
+	of_node_put(ep);
+#endif
 
 	asd = v4l2_async_nf_add_fwnode_remote(&csi2rx->notifier, fwh,
 					      struct v4l2_async_connection);
-	of_node_put(ep);
 	if (IS_ERR(asd)) {
 		v4l2_async_nf_cleanup(&csi2rx->notifier);
 		return PTR_ERR(asd);
@@ -817,6 +879,7 @@ static int csi2rx_parse_dt(struct csi2rx_priv *csi2rx)
 
 	return ret;
 }
+EXPORT_SYMBOL(csi2rx_parse_dt);
 
 static int csi2rx_probe(struct platform_device *pdev)
 {

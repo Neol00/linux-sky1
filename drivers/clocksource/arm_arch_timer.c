@@ -1215,7 +1215,11 @@ static int __init arch_timer_acpi_init(struct acpi_table_header *table)
 	 * When probing via ACPI, we have no mechanism to override the sysreg
 	 * CNTFRQ value. This *must* be correct.
 	 */
+#ifdef CONFIG_ARCH_CIX_EMU
+	arch_timer_rate = 1000000000;
+#else
 	arch_timer_rate = arch_timer_get_cntfrq();
+#endif
 	ret = validate_timer_rate();
 	if (ret) {
 		pr_err(FW_BUG "frequency not available.\n");

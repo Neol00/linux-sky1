@@ -521,6 +521,7 @@ int snd_info_card_register(struct snd_card *card)
 	card->proc_root_link = p;
 	return 0;
 }
+EXPORT_SYMBOL(snd_info_card_register);
 
 /*
  * called on card->id change

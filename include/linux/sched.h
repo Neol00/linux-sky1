@@ -817,6 +817,10 @@ struct kmap_ctrl {
 #endif
 };
 
+struct cc_task_struct {
+	u64 over_type;
+};
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*

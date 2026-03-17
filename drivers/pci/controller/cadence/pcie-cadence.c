@@ -82,9 +82,9 @@ void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
 	desc1 = 0;
 
 	/*
-	 * Whatever Bit [23] is set or not inside DESC0 register of the outbound
-	 * PCIe descriptor, the PCI function number must be set into
-	 * Bits [26:24] of DESC0 anyway.
+	 * Whatever Bit [23] is set or not inside DESC0 of the outbound PCIe
+	 * descriptor, the PCI function number must be set into
+	 * Bits [31:24] of DESC0 anyway.
 	 *
 	 * In Root Complex mode, the function number is always 0 but in Endpoint
 	 * mode, the PCIe controller may support more than one function. This
@@ -92,9 +92,9 @@ void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
 	 * descriptor.
 	 *
 	 * Besides, setting Bit [23] is mandatory when in Root Complex mode:
-	 * then the driver must provide the bus, resp. device, number in
-	 * Bits [7:0] of DESC1, resp. Bits[31:27] of DESC0. Like the function
-	 * number, the device number is always 0 in Root Complex mode.
+	 * then the driver must provide the bus number in
+	 * Bits [7:0] of DESC1. Like the function number, the device number
+	 * is always 0 in Root Complex mode.
 	 *
 	 * However when in Endpoint mode, we can clear Bit [23] of DESC0, hence
 	 * the PCIe controller will use the captured values for the bus and

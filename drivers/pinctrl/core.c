@@ -31,11 +31,13 @@
 #include <linux/pinctrl/devinfo.h>
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinctrl.h>
+#include <linux/acpi.h>
 
 #include "core.h"
 #include "devicetree.h"
 #include "pinconf.h"
 #include "pinmux.h"
+#include "pinctrl-acpi.h"
 
 static bool pinctrl_dummy_state;
 
@@ -1068,9 +1070,15 @@ static struct pinctrl *create_pinctrl(struct device *dev,
 		return ERR_PTR(-ENOMEM);
 	p->dev = dev;
 	INIT_LIST_HEAD(&p->states);
-	INIT_LIST_HEAD(&p->dt_maps);
 
-	ret = pinctrl_dt_to_map(p, pctldev);
+	if (has_acpi_companion(dev)) {
+		INIT_LIST_HEAD(&p->acpi_maps);
+		ret = pinctrl_acpi_to_map(p);
+	} else {
+		INIT_LIST_HEAD(&p->dt_maps);
+		ret = pinctrl_dt_to_map(p, pctldev);
+	}
+
 	if (ret < 0) {
 		kfree(p);
 		return ERR_PTR(ret);
@@ -1194,7 +1202,10 @@ static void pinctrl_free(struct pinctrl *p, bool inlist)
 		kfree(state);
 	}
 
-	pinctrl_dt_free_maps(p);
+	if (has_acpi_companion(p->dev))
+		pinctrl_acpi_free_maps(p);
+	else
+		pinctrl_dt_free_maps(p);
 
 	if (inlist)
 		list_del(&p->node);

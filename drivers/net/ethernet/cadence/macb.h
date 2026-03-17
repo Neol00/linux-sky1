@@ -1280,6 +1280,7 @@ struct ethtool_rx_fs_list {
 
 struct macb {
 	void __iomem		*regs;
+	struct regmap		*regmap;
 	bool			native_io;
 
 	/* hardware IO accessors */
@@ -1303,6 +1304,7 @@ struct macb {
 	struct clk		*tx_clk;
 	struct clk		*rx_clk;
 	struct clk		*tsu_clk;
+	struct reset_control	*rstn;
 	struct net_device	*dev;
 	/* Protects hw_stats and ethtool_stats */
 	spinlock_t		stats_lock;

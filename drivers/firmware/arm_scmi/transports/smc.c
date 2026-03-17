@@ -84,10 +84,10 @@ static irqreturn_t smc_msg_done_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static bool smc_chan_available(struct device_node *of_node, int idx)
+static bool smc_chan_available(struct fwnode_handle *fwnode, int idx)
 {
 	struct device_node *np __free(device_node) =
-					of_parse_phandle(of_node, "shmem", 0);
+					of_parse_phandle(to_of_node(fwnode), "shmem", 0);
 	if (!np)
 		return false;
 

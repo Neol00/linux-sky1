@@ -3072,6 +3072,7 @@ static int __set_cpus_allowed_ptr_locked(struct task_struct *p,
 	 * immediately required to distribute the tasks within their new mask.
 	 */
 	dest_cpu = cpumask_any_and_distribute(cpu_valid_mask, ctx->new_mask);
+
 	if (dest_cpu >= nr_cpu_ids) {
 		ret = -EINVAL;
 		goto out;
@@ -5290,6 +5291,10 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	rseq_sched_switch_event(next);
 
 	prepare_lock_switch(rq, next, rf);
+
+#ifdef CONFIG_PLAT_AP_HOOK
+	task_switch_hook((void *)prev, (void *)next);
+#endif
 
 	/* Here we just switch the register state and the stack. */
 	switch_to(prev, next, prev);

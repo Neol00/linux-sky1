@@ -10,6 +10,7 @@
 #include <linux/spi/spi.h>
 #include <linux/regmap.h>
 #include <linux/property.h>
+#include <linux/pinctrl/consumer.h>
 
 #include "inv_icm42600.h"
 

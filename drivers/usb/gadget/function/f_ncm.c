@@ -1724,9 +1724,12 @@ static void ncm_free(struct usb_function *f)
 static void ncm_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_ncm *ncm = func_to_ncm(f);
+	struct f_ncm_opts	*ncm_opts;
 
 	DBG(c->cdev, "ncm unbind\n");
 
+	ncm_opts = container_of(f->fi, struct f_ncm_opts, func_inst);
+	gether_set_gadget(ncm_opts->net, NULL);
 	hrtimer_cancel(&ncm->task_timer);
 
 	kfree(f->os_desc_table);

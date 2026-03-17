@@ -1445,7 +1445,11 @@ int panthor_fw_init(struct panthor_device *ptdev)
 	INIT_LIST_HEAD(&fw->sections);
 	INIT_DELAYED_WORK(&fw->watchdog.ping_work, panthor_fw_ping_work);
 
-	irq = platform_get_irq_byname(to_platform_device(ptdev->base.dev), "job");
+	if (has_acpi_companion(ptdev->base.dev))
+		irq = platform_get_irq(to_platform_device(ptdev->base.dev), 0);
+	else
+		irq = platform_get_irq_byname(to_platform_device(ptdev->base.dev), "job");
+
 	if (irq <= 0)
 		return -ENODEV;
 
@@ -1500,3 +1504,4 @@ MODULE_FIRMWARE("arm/mali/arch11.8/mali_csffw.bin");
 MODULE_FIRMWARE("arm/mali/arch12.8/mali_csffw.bin");
 MODULE_FIRMWARE("arm/mali/arch13.8/mali_csffw.bin");
 MODULE_FIRMWARE("arm/mali/arch14.8/mali_csffw.bin");
+MODULE_FIRMWARE("mali_csffw.bin");

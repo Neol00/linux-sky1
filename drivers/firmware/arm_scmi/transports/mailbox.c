@@ -12,6 +12,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 
 #include "../common.h"
@@ -77,8 +78,9 @@ static void rx_callback(struct mbox_client *cl, void *m)
 		      core->shmem->read_header(smbox->shmem), NULL);
 }
 
-static bool mailbox_chan_available(struct device_node *of_node, int idx)
+static bool mailbox_chan_available(struct fwnode_handle *fwnode, int idx)
 {
+	struct fwnode_reference_args fwnode_args;
 	int num_mb;
 
 	/*
@@ -86,12 +88,14 @@ static bool mailbox_chan_available(struct device_node *of_node, int idx)
 	 * index accordingly; proper full validation will be made later
 	 * in mailbox_chan_setup().
 	 */
-	num_mb = of_count_phandle_with_args(of_node, "mboxes", "#mbox-cells");
+	num_mb = fwnode_count_reference_with_args(fwnode, "mboxes",
+						  "#mbox-cells");
 	if (num_mb == 3 && idx == 1)
 		idx = 2;
 
-	return !of_parse_phandle_with_args(of_node, "mboxes",
-					   "#mbox-cells", idx, NULL);
+	return !fwnode_property_get_reference_args(fwnode, "mboxes",
+						   "#mbox-cells", 1, idx,
+						   &fwnode_args);
 }
 
 /**
@@ -116,10 +120,11 @@ static int mailbox_chan_validate(struct device *cdev, int *a2p_rx_chan,
 				 int *p2a_chan, int *p2a_rx_chan)
 {
 	int num_mb, num_sh, ret = 0;
-	struct device_node *np = cdev->of_node;
+	struct fwnode_handle *fwnode = cdev->fwnode;
 
-	num_mb = of_count_phandle_with_args(np, "mboxes", "#mbox-cells");
-	num_sh = of_count_phandle_with_args(np, "shmem", NULL);
+	num_mb = fwnode_count_reference_with_args(fwnode, "mboxes",
+						  "#mbox-cells");
+	num_sh = fwnode_count_reference_with_args(fwnode, "shmem", NULL);
 	dev_dbg(cdev, "Found %d mboxes and %d shmems !\n", num_mb, num_sh);
 
 	/* Bail out if mboxes and shmem descriptors are inconsistent */
@@ -127,22 +132,25 @@ static int mailbox_chan_validate(struct device *cdev, int *a2p_rx_chan,
 	    (num_mb == 1 && num_sh != 1) || (num_mb == 3 && num_sh != 2) ||
 	    (num_mb == 4 && num_sh != 2)) {
 		dev_warn(cdev,
-			 "Invalid channel descriptor for '%pOF' - mbs:%d  shm:%d\n",
-			 np, num_mb, num_sh);
+			 "Invalid channel descriptor for '%s' - mbs:%d  shm:%d\n",
+			 fwnode_get_name(fwnode), num_mb, num_sh);
 		return -EINVAL;
 	}
 
 	/* Bail out if provided shmem descriptors do not refer distinct areas  */
 	if (num_sh > 1) {
-		struct device_node *np_tx __free(device_node) =
-					of_parse_phandle(np, "shmem", 0);
-		struct device_node *np_rx __free(device_node) =
-					of_parse_phandle(np, "shmem", 1);
+		struct fwnode_handle *np_tx, *np_rx;
 
-		if (!np_tx || !np_rx || np_tx == np_rx) {
-			dev_warn(cdev, "Invalid shmem descriptor for '%pOF'\n", np);
+		np_tx = fwnode_find_reference(fwnode, "shmem", 0);
+		np_rx = fwnode_find_reference(fwnode, "shmem", 1);
+		if (IS_ERR_OR_NULL(np_tx) || IS_ERR_OR_NULL(np_rx) ||
+		    np_tx == np_rx) {
+			dev_warn(cdev, "Invalid shmem descriptor for '%s'\n",
+				 fwnode_get_name(fwnode));
 			ret = -EINVAL;
 		}
+		fwnode_handle_put(np_tx);
+		fwnode_handle_put(np_rx);
 	}
 
 	/* Calculate channels IDs to use depending on mboxes/shmem layout */
@@ -368,7 +376,7 @@ static const struct scmi_transport_ops scmi_mailbox_ops = {
 
 static struct scmi_desc scmi_mailbox_desc = {
 	.ops = &scmi_mailbox_ops,
-	.max_rx_timeout_ms = 30, /* We may increase this if required */
+	.max_rx_timeout_ms = 200, /* Increased for platforms with slower firmware */
 	.max_msg = 20, /* Limited by MBOX_TX_QUEUE_LEN */
 	.max_msg_size = SCMI_SHMEM_MAX_PAYLOAD_SIZE,
 };
@@ -381,7 +389,35 @@ MODULE_DEVICE_TABLE(of, scmi_of_match);
 
 DEFINE_SCMI_TRANSPORT_DRIVER(scmi_mailbox, scmi_mailbox_driver,
 			     scmi_mailbox_desc, scmi_of_match, core);
+
+#ifdef CONFIG_ARCH_CIX
+static const struct acpi_device_id scmi_mailbox_acpi_match[] = {
+	{ "CIXHA006", 0 },
+	{ /* Sentinel */ },
+};
+MODULE_DEVICE_TABLE(acpi, scmi_mailbox_acpi_match);
+
+static int __init scmi_mailbox_init(void)
+{
+	scmi_mailbox_driver.driver.acpi_match_table = scmi_mailbox_acpi_match;
+	return platform_driver_register(&scmi_mailbox_driver);
+}
+
+static void __exit scmi_mailbox_exit(void)
+{
+	platform_driver_unregister(&scmi_mailbox_driver);
+}
+
+/*
+ * Must probe before device_initcall consumers (cdns-i2c, sbsa-uart, etc.)
+ * so that SCMI clocks are registered via clkdev before consumers need them.
+ * CIX mailbox (CIXHA001) is already at arch_initcall, so it's ready.
+ */
+subsys_initcall_sync(scmi_mailbox_init);
+module_exit(scmi_mailbox_exit);
+#else
 module_platform_driver(scmi_mailbox_driver);
+#endif
 
 MODULE_AUTHOR("Sudeep Holla <sudeep.holla@arm.com>");
 MODULE_DESCRIPTION("SCMI Mailbox Transport driver");

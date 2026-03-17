@@ -1156,7 +1156,6 @@ static int set_dmic_clk(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
-
 static int rt5682s_set_pllb_power(struct rt5682s_priv *rt5682s, int on)
 {
 	struct snd_soc_component *component = rt5682s->component;
@@ -1699,7 +1698,7 @@ static const struct snd_soc_dapm_widget rt5682s_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY_S("DA ASRC", 1, RT5682S_PLL_TRACK_1,
 		RT5682S_DA_ASRC_SFT, 0, NULL, 0),
 	SND_SOC_DAPM_SUPPLY_S("DMIC ASRC", 1, RT5682S_PLL_TRACK_1,
-		RT5682S_DMIC_ASRC_SFT, 0, NULL, 0),
+		RT5682S_DMIC_ASRC_SFT, 1, NULL, 0),
 
 	/* Input Side */
 	SND_SOC_DAPM_SUPPLY("MICBIAS1", RT5682S_PWR_ANLG_2,
@@ -2058,6 +2057,26 @@ static int rt5682s_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
 	return 0;
 }
 
+static void rt5682s_adjust_filter_clk(struct snd_pcm_substream *substream,
+				      struct snd_soc_component *component,
+				      int dai_id)
+{
+	struct rt5682s_priv *rt5682s = snd_soc_component_get_drvdata(component);
+	int ref, reg;
+
+	if (dai_id == RT5682S_AIF2)
+		ref = 256 * rt5682s->lrck[RT5682S_AIF2];
+	else
+		ref = 256 * rt5682s->lrck[RT5682S_AIF1];
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
+		reg = RT5682S_PLL_TRACK_3;
+	else
+		reg = RT5682S_PLL_TRACK_2;
+
+	rt5682s_set_filter_clk(rt5682s, reg, ref);
+}
+
 static int rt5682s_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
 {
@@ -2122,6 +2141,8 @@ static int rt5682s_hw_params(struct snd_pcm_substream *substream,
 		dev_err(component->dev, "Invalid dai->id: %d\n", dai->id);
 		return -EINVAL;
 	}
+
+	rt5682s_adjust_filter_clk(substream, component, dai->id);
 
 	return 0;
 }
@@ -2906,6 +2927,8 @@ static int rt5682s_suspend(struct snd_soc_component *component)
 	regcache_cache_only(rt5682s->regmap, true);
 	regcache_mark_dirty(rt5682s->regmap);
 
+	gpiod_set_value_cansleep(rt5682s->ldo1_gpiod, 0);
+
 	return 0;
 }
 
@@ -2913,10 +2936,18 @@ static int rt5682s_resume(struct snd_soc_component *component)
 {
 	struct rt5682s_priv *rt5682s = snd_soc_component_get_drvdata(component);
 
+	gpiod_set_value_cansleep(rt5682s->ldo1_gpiod, 1);
+
+	/* Sleep for 50 ms minimum */
+	usleep_range(50000, 55000);
+
 	regcache_cache_only(rt5682s->regmap, false);
 	regcache_sync(rt5682s->regmap);
 
 	if (rt5682s->hs_jack) {
+		regmap_update_bits(rt5682s->regmap, RT5682S_CBJ_CTRL_2,
+			RT5682S_EXT_JD_SRC, RT5682S_EXT_JD_SRC_MANUAL);
+
 		mod_delayed_work(system_power_efficient_wq,
 			&rt5682s->jack_detect_work, msecs_to_jiffies(0));
 	}
@@ -3182,6 +3213,13 @@ static int rt5682s_i2c_probe(struct i2c_client *i2c)
 	if (IS_ERR(rt5682s->ldo1_en)) {
 		dev_err(&i2c->dev, "Fail gpio request ldo1_en\n");
 		return PTR_ERR(rt5682s->ldo1_en);
+	}
+
+	rt5682s->ldo1_gpiod = devm_gpiod_get_optional(&i2c->dev, "ldo1", GPIOD_OUT_HIGH);
+	if (IS_ERR(rt5682s->ldo1_gpiod)) {
+		ret = PTR_ERR(rt5682s->ldo1_gpiod);
+		dev_err(&i2c->dev, "failed to get ldo1 gpio, ret: %d\n", ret);
+		return ret;
 	}
 
 	/* Sleep for 50 ms minimum */

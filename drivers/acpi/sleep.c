@@ -33,6 +33,9 @@
 bool acpi_no_s5;
 static u8 sleep_states[ACPI_S_STATE_COUNT];
 
+static const struct acpi_fw_sleep_ops *fw_sleep_ops;
+static DEFINE_MUTEX(fw_sleep_ops_lock);
+
 static void acpi_sleep_tts_switch(u32 acpi_state)
 {
 	acpi_status status;
@@ -70,7 +73,8 @@ static int acpi_sleep_prepare(u32 acpi_state)
 	unsigned long acpi_wakeup_address;
 
 	/* do we have a wakeup address for S2 and S3? */
-	if (acpi_state == ACPI_STATE_S3 && !acpi_skip_set_wakeup_address()) {
+	if (acpi_state == ACPI_STATE_S3 && !acpi_skip_set_wakeup_address()
+		&& !acpi_gbl_reduced_hardware) {
 		acpi_wakeup_address = acpi_get_wakeup_address();
 		if (!acpi_wakeup_address)
 			return -EFAULT;
@@ -89,10 +93,29 @@ bool acpi_sleep_state_supported(u8 sleep_state)
 	acpi_status status;
 	u8 type_a, type_b;
 
-	status = acpi_get_sleep_type_data(sleep_state, &type_a, &type_b);
-	return ACPI_SUCCESS(status) && (!acpi_gbl_reduced_hardware
+	if (fw_sleep_ops && fw_sleep_ops->valid) {
+		return fw_sleep_ops->valid(sleep_state);
+	} else {
+		status = acpi_get_sleep_type_data(sleep_state, &type_a, &type_b);
+		return ACPI_SUCCESS(status) && (!acpi_gbl_reduced_hardware
 		|| (acpi_gbl_FADT.sleep_control.address
 			&& acpi_gbl_FADT.sleep_status.address));
+	}
+}
+
+void acpi_set_fw_sleep_ops(const struct acpi_fw_sleep_ops *ops)
+{
+	mutex_lock(&fw_sleep_ops_lock);
+	fw_sleep_ops = ops;
+	mutex_unlock(&fw_sleep_ops_lock);
+}
+
+acpi_status acpi_enter_sleep_state_toplevel(u8 acpi_state)
+{
+	if (fw_sleep_ops && fw_sleep_ops->enter)
+		return fw_sleep_ops->enter(acpi_state);
+	else
+		return acpi_enter_sleep_state(acpi_state);
 }
 
 #ifdef CONFIG_ACPI_SLEEP
@@ -605,12 +628,16 @@ static int acpi_suspend_enter(suspend_state_t pm_state)
 	switch (acpi_state) {
 	case ACPI_STATE_S1:
 		barrier();
-		status = acpi_enter_sleep_state(acpi_state);
+		status = acpi_enter_sleep_state_toplevel(acpi_state);
 		break;
 
 	case ACPI_STATE_S3:
+		if (fw_sleep_ops && fw_sleep_ops->enter)
+			return fw_sleep_ops->enter(acpi_state);
+#ifdef CONFIG_X86_64
 		if (!acpi_suspend_lowlevel)
 			return -ENOSYS;
+#endif
 		error = acpi_suspend_lowlevel();
 		if (error)
 			return error;
@@ -678,7 +705,6 @@ static int acpi_suspend_state_valid(suspend_state_t pm_state)
 	case PM_SUSPEND_STANDBY:
 	case PM_SUSPEND_MEM:
 		acpi_state = acpi_suspend_states[pm_state];
-
 		return sleep_states[acpi_state];
 	default:
 		return 0;
@@ -865,7 +891,6 @@ static void __init acpi_sleep_suspend_setup(void)
 {
 	bool suspend_ops_needed = false;
 	int i;
-
 	for (i = ACPI_STATE_S1; i < ACPI_STATE_S4; i++)
 		if (acpi_sleep_state_supported(i)) {
 			sleep_states[i] = 1;
@@ -951,7 +976,7 @@ static int acpi_hibernation_enter(void)
 	acpi_status status = AE_OK;
 
 	/* This shouldn't return.  If it returns, we have a problem */
-	status = acpi_enter_sleep_state(ACPI_STATE_S4);
+	status = acpi_enter_sleep_state_toplevel(ACPI_STATE_S4);
 	/* Reprogram control registers */
 	acpi_leave_sleep_state_prep(ACPI_STATE_S4);
 
@@ -1096,7 +1121,7 @@ static int acpi_power_off(struct sys_off_data *data)
 	/* acpi_sleep_prepare(ACPI_STATE_S5) should have already been called */
 	pr_debug("%s called\n", __func__);
 	local_irq_disable();
-	acpi_enter_sleep_state(ACPI_STATE_S5);
+	acpi_enter_sleep_state_toplevel(ACPI_STATE_S5);
 	return NOTIFY_DONE;
 }
 

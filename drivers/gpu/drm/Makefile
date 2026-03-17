@@ -236,6 +236,7 @@ obj-y			+= sitronix/
 obj-y			+= solomon/
 obj-$(CONFIG_DRM_SPRD) += sprd/
 obj-$(CONFIG_DRM_LOONGSON) += loongson/
+obj-$(CONFIG_DRM_CIX) += cix/
 obj-$(CONFIG_DRM_POWERVR) += imagination/
 
 # Ensure drm headers are self-contained and pass kernel-doc

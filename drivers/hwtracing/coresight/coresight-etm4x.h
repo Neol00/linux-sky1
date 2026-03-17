@@ -807,6 +807,12 @@ static inline u8 etm_devarch_to_arch(u32 devarch)
 				ETM_DEVARCH_REVISION(devarch));
 }
 
+static inline u8 etm_trcidr_to_arch(u32 trcidr1)
+{
+       return ETM_ARCH_VERSION(ETM_TRCIDR1_ARCH_MAJOR(trcidr1),
+                               ETM_TRCIDR1_ARCH_MINOR(trcidr1));
+}
+
 enum etm_impdef_type {
 	ETM4_IMPDEF_HISI_CORE_COMMIT,
 	ETM4_IMPDEF_FEATURE_MAX,

@@ -433,7 +433,6 @@
 #define __ec_todo_packed __packed
 #define __ec_todo_unpacked
 
-
 /* LPC command status byte masks */
 /* EC has written a byte in the data register and host hasn't read it yet */
 #define EC_LPC_STATUS_TO_HOST     0x01
@@ -6663,6 +6662,90 @@ struct ec_params_usb_pd_mux_ack {
 #define EC_LPC_ADDR_OLD_PARAM   EC_HOST_CMD_REGION1
 #define EC_OLD_PARAM_SIZE       EC_HOST_CMD_REGION_SIZE
 
+#ifdef CONFIG_CIX_EC
+/*****************************************************************************/
+/* Cix EC commands */
 
+#define EC_CMD_INT_GET_INFO 0x0055
+
+struct ec_response_int_get_info {
+	uint8_t type;
+	uint32_t data;
+} __ec_align4;
+
+#define EC_CMD_FORCE_LID_OPEN 0x002C
+#define EC_CMD_GET_LID_STAT 0x3E20
+
+struct ec_response_lid_get_stat {
+	uint8_t data;
+} __ec_align1;
+
+struct ec_lid_open {
+    bool force_open;
+} __ec_align1;
+
+#define EC_CMD_LIGHT_WRITE_RAW 0x0031
+#define EC_CMD_LIGHT_READ_RAW 0x0032
+
+struct ec_params_light_write_info {
+	uint8_t type;
+	uint32_t value;
+} __ec_align4;
+
+struct ec_params_light_read_info {
+	uint8_t type;
+	uint32_t value;
+} __ec_align4;
+
+
+#define EC_CMD_INT_WRITE_GPIO 0x0092
+struct ec_params_gpio_write {
+   uint8_t gpio_num;
+   uint8_t gpio_val;
+} __ec_align4;
+
+#define EC_CMD_INT_READ_GPIO 0x0093
+struct ec_params_gpio_read {
+   uint8_t gpio_num;
+}__ec_align4;
+
+struct ec_response_gpio_read {
+   uint8_t gpio_val;
+}__ec_align4;
+
+#define EC_CMD_GET_CHARGER_INFO 0x3E02
+#define EC_CMD_GET_PWROFFRSN 0x3E09
+
+#define EC_CMD_SET_OS_TYPE 0x3E22
+struct ec_pwrkey_info {
+    uint8_t os_type;
+} __ec_align4;
+
+#define EC_CMD_THERMAL_AUTO_FAN_CTRL  0x0052
+struct ec_fan_info {
+    uint8_t mode;
+} __ec_align4;
+
+#ifdef CONFIG_CIX_EC_EXCEPTION_DRIVER
+struct ec_response_ic_error_info
+{
+    uint16_t ChgState;
+    uint16_t ProchotState;
+    uint16_t ECState;
+    uint16_t Reserved;
+};
+#define EC_CMD_GET_IC_ERROR_STATE 0x3E14
+#endif /* CONFIG_CIX_EC_EXCEPTION */
+#endif /* CONFIG_CIX_EC */
+
+#ifdef CONFIG_CIX_EC
+#define ec_be16_to_cpu(x) be16_to_cpu(x)
+#define ec_be32_to_cpu(x) be32_to_cpu(x)
+#define ec_cpu_to_be16(x) cpu_to_be16(x)
+#else
+#define ec_be16_to_cpu(x) x
+#define ec_be32_to_cpu(x) x
+#define ec_cpu_to_be16(x) x
+#endif
 
 #endif  /* __CROS_EC_COMMANDS_H */

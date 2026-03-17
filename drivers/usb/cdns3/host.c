@@ -63,16 +63,51 @@ static const struct xhci_plat_priv xhci_plat_cdns3_xhci = {
 };
 
 static const struct xhci_plat_priv xhci_plat_cdnsp_xhci = {
-	.quirks = XHCI_CDNS_SCTX_QUIRK,
+	.quirks = XHCI_CDNS_SCTX_QUIRK | XHCI_SKIP_PHY_INIT | XHCI_HW_LPM_DISABLE,
 };
 
+static int cdns_host_restore(struct cdns *cdns)
+{
+	u32 ready_bit, value;
+
+	if (cdns->version == CDNSP_CONTROLLER_V2)
+		ready_bit = OTGSTS_CDNSP_XHCI_READY;
+	else
+		ready_bit = OTGSTS_CDNS3_XHCI_READY;
+
+	value = readl(&cdns->otg_regs->sts);
+	if (value & ready_bit) {
+		dev_dbg(cdns->dev, "already at host mode, quit\n");
+		return 0;
+	}
+
+	if (cdns->xhci_device) {
+		struct usb_hcd *hcd = platform_get_drvdata(cdns->xhci_device);
+		if (hcd) {
+			struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+
+			/* Mark hcd state is halt and not accessible */
+			hcd->state = 0;
+			xhci = hcd_to_xhci(hcd);
+			clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+			if (xhci->shared_hcd)
+				clear_bit(HCD_FLAG_HW_ACCESSIBLE, &xhci->shared_hcd->flags);
+		}
+	}
+
+	return 0;
+}
 static int __cdns_host_init(struct cdns *cdns)
 {
 	struct platform_device *xhci;
 	int ret;
 	struct usb_hcd *hcd;
 
-	cdns_drd_host_on(cdns);
+	ret = cdns_drd_host_on(cdns);
+	if (ret) {
+		dev_err(cdns->dev, "failed to enable host on\n");
+		return ret;
+	}
 
 	xhci = platform_device_alloc("xhci-hcd", PLATFORM_DEVID_AUTO);
 	if (!xhci) {
@@ -116,6 +151,7 @@ static int __cdns_host_init(struct cdns *cdns)
 		goto free_memory;
 	}
 
+	cdns->xhci_device = xhci;
 	/* Glue needs to access xHCI region register for Power management */
 	hcd = platform_get_drvdata(xhci);
 	if (hcd)
@@ -158,6 +194,7 @@ int cdns_host_init(struct cdns *cdns)
 
 	rdrv->start	= __cdns_host_init;
 	rdrv->stop	= cdns_host_exit;
+	rdrv->restore	= cdns_host_restore;
 	rdrv->resume	= cdns_host_resume;
 	rdrv->state	= CDNS_ROLE_STATE_INACTIVE;
 	rdrv->name	= "host";

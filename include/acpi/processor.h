@@ -429,6 +429,7 @@ int acpi_processor_ffh_lpi_enter(struct acpi_lpi_state *lpi);
 #endif /* CONFIG_ACPI_PROCESSOR_IDLE */
 
 /* in processor_thermal.c */
+int acpi_processor_get_limit_info(struct acpi_processor *pr);
 int acpi_processor_thermal_init(struct acpi_processor *pr,
 				struct acpi_device *device);
 void acpi_processor_thermal_exit(struct acpi_processor *pr,

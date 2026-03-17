@@ -27,4 +27,18 @@
 #define ARM_LPAE_TCR_PS_48_BIT		0x5ULL
 #define ARM_LPAE_TCR_PS_52_BIT		0x6ULL
 
+#ifdef CONFIG_ARM_SMMU_V3_WALK
+struct pgt_io_map {
+	u64		iova;
+	phys_addr_t	pa;
+	u32		len;
+	u32		prot;
+};
+
+typedef int (*io_pgt_map_cb)(struct pgt_io_map *, void *);
+
+int lpae_io_pgt_walk(void *pgd, struct io_pgtable_ops *ops,
+			int stage, io_pgt_map_cb callback, void *param);
+#endif
+
 #endif /* IO_PGTABLE_ARM_H_ */

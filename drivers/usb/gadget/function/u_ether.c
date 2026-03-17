@@ -893,7 +893,10 @@ void gether_set_gadget(struct net_device *net, struct usb_gadget *g)
 
 	dev = netdev_priv(net);
 	dev->gadget = g;
-	SET_NETDEV_DEV(net, &g->dev);
+	if (g)
+		SET_NETDEV_DEV(net, &g->dev);
+	else
+		SET_NETDEV_DEV(net, NULL);
 }
 EXPORT_SYMBOL_GPL(gether_set_gadget);
 

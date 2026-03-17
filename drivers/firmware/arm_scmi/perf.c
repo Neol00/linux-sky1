@@ -27,7 +27,7 @@
 /* Updated only after ALL the mandatory features for that version are merged */
 #define SCMI_PROTOCOL_SUPPORTED_VERSION		0x40000
 
-#define MAX_OPPS		64
+#define MAX_OPPS		256
 
 enum scmi_performance_protocol_cmd {
 	PERF_DOMAIN_ATTRIBUTES = 0x3,
@@ -360,6 +360,10 @@ static int iter_perf_levels_update_state(struct scmi_iterator_state *st,
 {
 	const struct scmi_msg_resp_perf_describe_levels *r = response;
 
+	/* Guard against empty/truncated firmware responses (stale buffer) */
+	if (st->rx_len < sizeof(__le16) * 2)
+		return -EINVAL;
+
 	st->num_returned = le16_to_cpu(r->num_returned);
 	st->num_remaining = le16_to_cpu(r->num_remaining);
 
@@ -380,8 +384,7 @@ process_response_opp(struct device *dev, struct perf_dom_info *dom,
 
 	ret = xa_insert(&dom->opps_by_lvl, opp->perf, opp, GFP_KERNEL);
 	if (ret) {
-		dev_info(dev, FW_BUG "Failed to add opps_by_lvl at %d for %s - ret:%d\n",
-			 opp->perf, dom->info.name, ret);
+		/* Silently skip duplicate OPP levels (expected with CIX BIOS) */
 		return ret;
 	}
 
@@ -402,8 +405,7 @@ process_response_opp_v4(struct device *dev, struct perf_dom_info *dom,
 
 	ret = xa_insert(&dom->opps_by_lvl, opp->perf, opp, GFP_KERNEL);
 	if (ret) {
-		dev_info(dev, FW_BUG "Failed to add opps_by_lvl at %d for %s - ret:%d\n",
-			 opp->perf, dom->info.name, ret);
+		/* Silently skip duplicate OPP levels (expected with CIX BIOS) */
 		return ret;
 	}
 
@@ -866,6 +868,10 @@ static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
 {
 	int idx, ret;
 	unsigned long freq;
+#ifdef CONFIG_ARCH_CIX
+	unsigned long volt;
+#endif
+	struct scmi_opp *opp;
 	struct dev_pm_opp_data data = {};
 	struct perf_dom_info *dom;
 
@@ -873,19 +879,20 @@ static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
 	if (IS_ERR(dom))
 		return PTR_ERR(dom);
 
-	for (idx = 0; idx < dom->opp_count; idx++) {
-		if (!dom->level_indexing_mode)
-			freq = dom->opp[idx].perf * dom->mult_factor;
-		else
-			freq = dom->opp[idx].indicative_freq * dom->mult_factor;
-
+	for (opp = dom->opp, idx = 0; idx < dom->opp_count; idx++, opp++) {
+		freq = opp->perf * dom->mult_factor;
+#ifdef CONFIG_ARCH_CIX
+		volt = opp->power * 1000; /* translate mV to uV */
+		ret = dev_pm_opp_add(dev, freq, volt);
+#else
 		/* All OPPs above the sustained frequency are treated as turbo */
 		data.turbo = freq > dom->sustained_freq_khz * 1000UL;
 
-		data.level = dom->opp[idx].perf;
+		data.level = opp->perf;
 		data.freq = freq;
 
 		ret = dev_pm_opp_add_dynamic(dev, &data);
+#endif
 		if (ret) {
 			dev_warn(dev, "[%d][%s]: Failed to add OPP[%d] %lu\n",
 				 domain, dom->info.name, idx, freq);
@@ -1291,6 +1298,8 @@ static int scmi_perf_protocol_init(const struct scmi_protocol_handle *ph)
 		struct perf_dom_info *dom = pinfo->dom_info + domain;
 
 		dom->id = domain;
+		xa_init(&dom->opps_by_lvl);
+		xa_init(&dom->opps_by_idx);
 		scmi_perf_domain_attributes_get(ph, dom, pinfo->notify_lim_cmd,
 						pinfo->notify_lvl_cmd);
 		scmi_perf_describe_levels_get(ph, dom);

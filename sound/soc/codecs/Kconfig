@@ -247,6 +247,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_RTQ9128
 	imply SND_SOC_SDW_MOCKUP
 	imply SND_SOC_SGTL5000
+	imply SND_SOC_SN6040
 	imply SND_SOC_SI476X
 	imply SND_SOC_SIMPLE_AMPLIFIER
 	imply SND_SOC_SIMPLE_MUX
@@ -364,6 +365,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_WSA883X
 	imply SND_SOC_WSA884X
 	imply SND_SOC_ZL38060
+	imply SND_SOC_DUMMY_CODEC
 	help
 	  Normally ASoC codec drivers are only built if a machine driver which
 	  uses them is also built since they are only usable with a machine
@@ -2025,6 +2027,12 @@ config SND_SOC_SI476X
 	tristate
 	depends on MFD_SI476X_CORE
 
+config SND_SOC_SN6040
+	tristate "SenaryTech SN6040 CODEC"
+	depends on I2C
+	help
+	  Enable support for SenaryTech SN6040 codec chip.
+
 config SND_SOC_SIGMADSP
 	tristate
 	select CRC32
@@ -2869,5 +2877,8 @@ config SND_SOC_LPASS_TX_MACRO
 	select REGMAP_MMIO
 	select SND_SOC_LPASS_MACRO_COMMON
 	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"
+
+config SND_SOC_DUMMY_CODEC
+	tristate "Dummy codec driver"
 
 endmenu

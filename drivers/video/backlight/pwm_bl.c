@@ -17,6 +17,7 @@
 #include <linux/pwm_backlight.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <acpi/video.h>
 
 struct pwm_bl_data {
 	struct pwm_device	*pwm;
@@ -218,16 +219,13 @@ int pwm_backlight_brightness_default(struct device *dev,
 static int pwm_backlight_parse_dt(struct device *dev,
 				  struct platform_pwm_backlight_data *data)
 {
-	struct device_node *node = dev->of_node;
 	unsigned int num_levels;
 	unsigned int num_steps = 0;
-	struct property *prop;
 	unsigned int *table;
-	int length;
 	u32 value;
 	int ret;
 
-	if (!node)
+	if (!dev)
 		return -ENODEV;
 
 	memset(data, 0, sizeof(*data));
@@ -236,19 +234,18 @@ static int pwm_backlight_parse_dt(struct device *dev,
 	 * These values are optional and set as 0 by default, the out values
 	 * are modified only if a valid u32 value can be decoded.
 	 */
-	of_property_read_u32(node, "post-pwm-on-delay-ms",
+	device_property_read_u32(dev, "post-pwm-on-delay-ms",
 			     &data->post_pwm_on_delay);
-	of_property_read_u32(node, "pwm-off-delay-ms", &data->pwm_off_delay);
+	device_property_read_u32(dev, "pwm-off-delay-ms", &data->pwm_off_delay);
 
 	/*
 	 * Determine the number of brightness levels, if this property is not
 	 * set a default table of brightness levels will be used.
 	 */
-	prop = of_find_property(node, "brightness-levels", &length);
-	if (!prop)
+	if (!device_property_present(dev, "brightness-levels"))
 		return 0;
 
-	num_levels = length / sizeof(u32);
+	num_levels = device_property_count_u32(dev, "brightness-levels");
 
 	/* read brightness levels from DT property */
 	if (num_levels > 0) {
@@ -257,13 +254,13 @@ static int pwm_backlight_parse_dt(struct device *dev,
 		if (!data->levels)
 			return -ENOMEM;
 
-		ret = of_property_read_u32_array(node, "brightness-levels",
+		ret = device_property_read_u32_array(dev, "brightness-levels",
 						 data->levels,
 						 num_levels);
 		if (ret < 0)
 			return ret;
 
-		ret = of_property_read_u32(node, "default-brightness-level",
+		ret = device_property_read_u32(dev, "default-brightness-level",
 					   &value);
 		if (ret < 0)
 			return ret;
@@ -275,7 +272,7 @@ static int pwm_backlight_parse_dt(struct device *dev,
 		 * interpolation between each of the values of brightness levels
 		 * and creates a new pre-computed table.
 		 */
-		of_property_read_u32(node, "num-interpolated-steps",
+		device_property_read_u32(dev, "num-interpolated-steps",
 				     &num_steps);
 
 		/*
@@ -368,6 +365,12 @@ int pwm_backlight_brightness_default(struct device *dev,
 	return -ENODEV;
 }
 #endif
+
+static const struct acpi_device_id pwm_backlight_acpi_match[] = {
+				{ .id = "CIXH5041", .driver_data = 0 },
+				{ /* sentinel */ } };
+
+MODULE_DEVICE_TABLE(acpi, pwm_backlight_acpi_match);
 
 static bool pwm_backlight_is_linear(struct platform_pwm_backlight_data *data)
 {
@@ -604,6 +607,16 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 	backlight_update_status(bl);
 
 	platform_set_drvdata(pdev, bl);
+
+	if (has_acpi_companion(&pdev->dev)) {
+		acpi_status status = acpi_install_notify_handler(
+			to_acpi_device_node(pdev->dev.fwnode)->handle,
+			ACPI_DEVICE_NOTIFY, acpi_brightness_adjust_notify,
+			pdev);
+		if (ACPI_FAILURE(status))
+			dev_err(&pdev->dev, "Error installing notify handler\n");
+	}
+
 	return 0;
 
 err_alloc:

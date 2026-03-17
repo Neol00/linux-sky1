@@ -10,7 +10,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/delay.h>
-
 #include <linux/iio/buffer.h>
 #include <linux/iio/common/inv_sensors_timestamp.h>
 #include <linux/iio/iio.h>
@@ -119,12 +118,11 @@ void inv_icm42600_buffer_update_fifo_period(struct inv_icm42600_state *st)
 int inv_icm42600_buffer_set_fifo_en(struct inv_icm42600_state *st,
 				    unsigned int fifo_en)
 {
-	unsigned int mask, val;
+	unsigned int mask, val, orig_val;
 	int ret;
 
 	/* update only FIFO EN bits */
 	mask = INV_ICM42600_FIFO_CONFIG1_TMST_FSYNC_EN |
-		INV_ICM42600_FIFO_CONFIG1_TEMP_EN |
 		INV_ICM42600_FIFO_CONFIG1_GYRO_EN |
 		INV_ICM42600_FIFO_CONFIG1_ACCEL_EN;
 
@@ -133,10 +131,30 @@ int inv_icm42600_buffer_set_fifo_en(struct inv_icm42600_state *st,
 		val |= INV_ICM42600_FIFO_CONFIG1_GYRO_EN;
 	if (fifo_en & INV_ICM42600_SENSOR_ACCEL)
 		val |= INV_ICM42600_FIFO_CONFIG1_ACCEL_EN;
-	if (fifo_en & INV_ICM42600_SENSOR_TEMP)
-		val |= INV_ICM42600_FIFO_CONFIG1_TEMP_EN;
 
-	ret = regmap_update_bits(st->map, INV_ICM42600_REG_FIFO_CONFIG1, mask, val);
+	/* read origin val */
+	ret = regmap_write(st->map, INC_ICM42670_REG_BLK_SEL_R, 0);
+	ret = regmap_write(st->map, INC_ICM42670_REG_MADDR_R,
+				INV_ICM42600_REG_FIFO_CONFIG1);
+	udelay(10);
+	ret = regmap_read(st->map, INC_ICM42670_REG_M_R, &orig_val);
+	udelay(10);
+
+	val = orig_val | val;
+
+	/* BLK_SEL_W must be set to 0 */
+	ret = regmap_write(st->map, INC_ICM42670_REG_BLK_SEL_W, 0);
+
+	/* MADDR_W must be set to the address of the MREG1 register being accessed */
+	ret = regmap_write(st->map, INC_ICM42670_REG_MADDR_W,
+					INV_ICM42600_REG_FIFO_CONFIG1);
+
+	/* M_W must be set to the desired value */
+	ret = regmap_write(st->map, INC_ICM42670_REG_M_W, val);
+
+	/* wait for 10 us */
+	udelay(10);
+
 	if (ret)
 		return ret;
 
@@ -587,8 +605,32 @@ int inv_icm42600_buffer_init(struct inv_icm42600_state *st)
 	 * Enable FIFO partial read and continuous watermark interrupt.
 	 * Disable all FIFO EN bits.
 	 */
+
+	/* read origin val */
+	ret = regmap_write(st->map, INC_ICM42670_REG_BLK_SEL_R, 0);
+	ret = regmap_write(st->map, INC_ICM42670_REG_MADDR_R,
+				INV_ICM42600_REG_FIFO_CONFIG1);
+	udelay(10);
+	ret = regmap_read(st->map, INC_ICM42670_REG_M_R, &orig_val);
+	udelay(10);
+
 	val = INV_ICM42600_FIFO_CONFIG1_RESUME_PARTIAL_RD |
 	      INV_ICM42600_FIFO_CONFIG1_WM_GT_TH;
-	return regmap_update_bits(st->map, INV_ICM42600_REG_FIFO_CONFIG1,
-				  GENMASK(6, 5) | GENMASK(3, 0), val);
+
+	val = val | orig_val;
+
+	/* BLK_SEL_W must be set to 0 */
+	ret = regmap_write(st->map, INC_ICM42670_REG_BLK_SEL_W, 0);
+
+	/* MADDR_W must be set to the address of the MREG1 register being accessed */
+	ret = regmap_write(st->map, INC_ICM42670_REG_MADDR_W,
+					INV_ICM42600_REG_FIFO_CONFIG1);
+
+	/* M_W must be set to the desired value */
+	ret = regmap_write(st->map, INC_ICM42670_REG_M_W, val);
+
+	/* wait for 10 us */
+	udelay(10);
+
+	return ret;
 }

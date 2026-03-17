@@ -309,6 +309,7 @@ static int get_set_conduit_method(const struct device_node *np)
 static int psci_sys_reset(struct notifier_block *nb, unsigned long action,
 			  void *data)
 {
+
 	if ((reboot_mode == REBOOT_WARM || reboot_mode == REBOOT_SOFT) &&
 	    psci_system_reset2_supported) {
 		/*
@@ -576,6 +577,9 @@ static void __init psci_init_system_suspend(void)
 	if (!IS_ENABLED(CONFIG_SUSPEND))
 		return;
 
+	if (!acpi_disabled)
+		return;
+
 	ret = psci_features(PSCI_FN_NATIVE(1_0, SYSTEM_SUSPEND));
 
 	if (ret != PSCI_RET_NOT_SUPPORTED)
@@ -821,6 +825,31 @@ int __init psci_dt_init(void)
  * We use PSCI 0.2+ when ACPI is deployed on ARM64 and it's
  * explicitly clarified in SBBR
  */
+
+static int acpi_psci_enter_sleep_state(u8 acpi_state)
+{
+	switch (acpi_state) {
+		case ACPI_STATE_S3:
+			return psci_system_suspend_enter(acpi_state);
+		case ACPI_STATE_S4:
+		case ACPI_STATE_S5:
+			psci_sys_poweroff();
+			return 0;
+		default:
+			return -EFAULT;
+	}
+}
+
+static bool acpi_psci_valid_sleep_state(u8 acpi_state)
+{
+	return acpi_state >= ACPI_STATE_S3;
+}
+
+struct acpi_fw_sleep_ops psci_sleep_ops = {
+	.enter = acpi_psci_enter_sleep_state,
+	.valid = acpi_psci_valid_sleep_state
+};
+
 int __init psci_acpi_init(void)
 {
 	if (!acpi_psci_present()) {
@@ -834,6 +863,8 @@ int __init psci_acpi_init(void)
 		set_conduit(SMCCC_CONDUIT_HVC);
 	else
 		set_conduit(SMCCC_CONDUIT_SMC);
+
+	acpi_set_fw_sleep_ops(&psci_sleep_ops);
 
 	return psci_probe();
 }

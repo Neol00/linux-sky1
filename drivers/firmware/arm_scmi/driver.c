@@ -421,7 +421,7 @@ EXPORT_SYMBOL_GPL(scmi_protocol_unregister);
  *	  call will lead to the creation of all the devices currently requested
  *	  for the specified protocol.
  */
-static void scmi_create_protocol_devices(struct device_node *np,
+static void scmi_create_protocol_devices(struct fwnode_handle *np,
 					 struct scmi_info *info,
 					 int prot_id, const char *name)
 {
@@ -1840,8 +1840,10 @@ static int scmi_iterator_run(void *iter)
 
 		if (st->num_returned > st->max_resources - st->desc_index) {
 			dev_err(ph->dev,
-				"No. of resources can't exceed %d\n",
-				st->max_resources);
+				"No. of resources can't exceed %d (got %d, remaining %d, rx_len %zd, desc_index %d)\n",
+				st->max_resources, st->num_returned,
+				st->num_remaining, st->rx_len,
+				st->desc_index);
 			ret = -EINVAL;
 			break;
 		}
@@ -2013,8 +2015,8 @@ err_xfer:
 	ph->xops->xfer_put(ph, t);
 
 err_out:
-	dev_warn(ph->dev,
-		 "Failed to get FC for protocol %X [MSG_ID:%u / RES_ID:%u] - ret:%d. Using regular messaging.\n",
+	dev_info(ph->dev,
+		 "Cannot configure FC for protocol %X [MSG_ID:%u / RES_ID:%u] - ret:%d. Using regular messaging.\n",
 		 pi->proto->id, message_id, domain, ret);
 }
 
@@ -2378,6 +2380,11 @@ scmi_is_protocol_implemented(const struct scmi_handle *handle, u8 prot_id)
 	struct scmi_info *info = handle_to_scmi_info(handle);
 	struct scmi_revision_info *rev = handle->version;
 
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	if (prot_id == SCMI_PROTOCOL_PM_EXCP)
+		return true;
+#endif
+
 	if (!info->protocols_imp)
 		return false;
 
@@ -2708,7 +2715,7 @@ static int scmi_xfer_info_init(struct scmi_info *sinfo)
 	return ret;
 }
 
-static int scmi_chan_setup(struct scmi_info *info, struct device_node *of_node,
+static int scmi_chan_setup(struct scmi_info *info, struct fwnode_handle *fwnode,
 			   int prot_id, bool tx)
 {
 	int ret, idx;
@@ -2721,7 +2728,7 @@ static int scmi_chan_setup(struct scmi_info *info, struct device_node *of_node,
 	idx = tx ? 0 : 1;
 	idr = tx ? &info->tx_idr : &info->rx_idr;
 
-	if (!info->desc->ops->chan_available(of_node, idx)) {
+	if (!info->desc->ops->chan_available(fwnode, idx)) {
 		cinfo = idr_find(idr, SCMI_PROTOCOL_BASE);
 		if (unlikely(!cinfo)) /* Possible only if platform has no Rx */
 			return -EINVAL;
@@ -2740,20 +2747,20 @@ static int scmi_chan_setup(struct scmi_info *info, struct device_node *of_node,
 	snprintf(name, 32, "__scmi_transport_device_%s_%02X",
 		 idx ? "rx" : "tx", prot_id);
 	/* Create a uniquely named, dedicated transport device for this chan */
-	tdev = scmi_device_create(of_node, info->dev, prot_id, name);
+	tdev = scmi_device_create(fwnode, info->dev, prot_id, name);
 	if (!tdev) {
 		dev_err(info->dev,
 			"failed to create transport device (%s)\n", name);
 		devm_kfree(info->dev, cinfo);
 		return -EINVAL;
 	}
-	of_node_get(of_node);
+	fwnode_handle_get(fwnode);
 
 	cinfo->id = prot_id;
 	cinfo->dev = &tdev->dev;
 	ret = info->desc->ops->chan_setup(cinfo, info->dev, tx);
 	if (ret) {
-		of_node_put(of_node);
+		fwnode_handle_put(fwnode);
 		scmi_device_destroy(info->dev, prot_id, name);
 		devm_kfree(info->dev, cinfo);
 		return ret;
@@ -2776,7 +2783,7 @@ idr_alloc:
 			"unable to allocate SCMI idr slot err %d\n", ret);
 		/* Destroy channel and device only if created by this call. */
 		if (tdev) {
-			of_node_put(of_node);
+			fwnode_handle_put(fwnode);
 			scmi_device_destroy(info->dev, prot_id, name);
 			devm_kfree(info->dev, cinfo);
 		}
@@ -2788,14 +2795,14 @@ idr_alloc:
 }
 
 static inline int
-scmi_txrx_setup(struct scmi_info *info, struct device_node *of_node,
+scmi_txrx_setup(struct scmi_info *info, struct fwnode_handle *fwnode,
 		int prot_id)
 {
-	int ret = scmi_chan_setup(info, of_node, prot_id, true);
+	int ret = scmi_chan_setup(info, fwnode, prot_id, true);
 
 	if (!ret) {
 		/* Rx is optional, report only memory errors */
-		ret = scmi_chan_setup(info, of_node, prot_id, false);
+		ret = scmi_chan_setup(info, fwnode, prot_id, false);
 		if (ret && ret != -ENOMEM)
 			ret = 0;
 	}
@@ -2828,17 +2835,17 @@ scmi_txrx_setup(struct scmi_info *info, struct device_node *of_node,
 static int scmi_channels_setup(struct scmi_info *info)
 {
 	int ret;
-	struct device_node *top_np = info->dev->of_node;
+	struct fwnode_handle *child, *top_np = dev_fwnode(info->dev);
 
 	/* Initialize a common generic channel at first */
 	ret = scmi_txrx_setup(info, top_np, SCMI_PROTOCOL_BASE);
 	if (ret)
 		return ret;
 
-	for_each_available_child_of_node_scoped(top_np, child) {
+	fwnode_for_each_child_node(top_np, child) {
 		u32 prot_id;
 
-		if (of_property_read_u32(child, "reg", &prot_id))
+		if (fwnode_property_read_u32(child, "reg", &prot_id))
 			continue;
 
 		if (!FIELD_FIT(MSG_PROTOCOL_ID_MASK, prot_id))
@@ -2846,8 +2853,10 @@ static int scmi_channels_setup(struct scmi_info *info)
 				"Out of range protocol %d\n", prot_id);
 
 		ret = scmi_txrx_setup(info, child, prot_id);
-		if (ret)
+		if (ret) {
+			fwnode_handle_put(child);
 			return ret;
+		}
 	}
 
 	return 0;
@@ -2922,7 +2931,7 @@ static int scmi_bus_notifier(struct notifier_block *nb,
 static int scmi_device_request_notifier(struct notifier_block *nb,
 					unsigned long action, void *data)
 {
-	struct device_node *np;
+	struct fwnode_handle *np;
 	struct scmi_device_id *id_table = data;
 	struct scmi_info *info = req_nb_to_scmi_info(nb);
 
@@ -3023,16 +3032,19 @@ static struct scmi_debug_info *scmi_debugfs_common_setup(struct scmi_info *info)
 	if (!dbg)
 		return NULL;
 
-	dbg->name = kstrdup(of_node_full_name(info->dev->of_node), GFP_KERNEL);
-	if (!dbg->name) {
-		devm_kfree(info->dev, dbg);
-		return NULL;
+	if (info->dev->of_node) {
+		dbg->name = kstrdup(of_node_full_name(info->dev->of_node),
+				    GFP_KERNEL);
+		of_property_read_string(info->dev->of_node, "compatible",
+					&c_ptr);
+		dbg->type = kstrdup(c_ptr, GFP_KERNEL);
+	} else {
+		dbg->name = kstrdup(dev_name(info->dev), GFP_KERNEL);
+		dbg->type = kstrdup("arm-scmi", GFP_KERNEL);
 	}
-
-	of_property_read_string(info->dev->of_node, "compatible", &c_ptr);
-	dbg->type = kstrdup(c_ptr, GFP_KERNEL);
-	if (!dbg->type) {
+	if (!dbg->name || !dbg->type) {
 		kfree(dbg->name);
+		kfree(dbg->type);
 		devm_kfree(info->dev, dbg);
 		return NULL;
 	}
@@ -3135,20 +3147,20 @@ static const struct scmi_desc *scmi_transport_setup(struct device *dev)
 
 	dev_info(dev, "Using %s\n", dev_driver_string(trans->supplier));
 
-	ret = of_property_read_u32(dev->of_node, "arm,max-rx-timeout-ms",
-				   &trans->desc.max_rx_timeout_ms);
+	ret = device_property_read_u32(dev, "arm,max-rx-timeout-ms",
+				      &trans->desc.max_rx_timeout_ms);
 	if (ret && ret != -EINVAL)
-		dev_err(dev, "Malformed arm,max-rx-timeout-ms DT property.\n");
+		dev_dbg(dev, "No arm,max-rx-timeout-ms property.\n");
 
-	ret = of_property_read_u32(dev->of_node, "arm,max-msg-size",
-				   &trans->desc.max_msg_size);
+	ret = device_property_read_u32(dev, "arm,max-msg-size",
+				       &trans->desc.max_msg_size);
 	if (ret && ret != -EINVAL)
-		dev_err(dev, "Malformed arm,max-msg-size DT property.\n");
+		dev_dbg(dev, "No arm,max-msg-size property.\n");
 
-	ret = of_property_read_u32(dev->of_node, "arm,max-msg",
-				   &trans->desc.max_msg);
+	ret = device_property_read_u32(dev, "arm,max-msg",
+				       &trans->desc.max_msg);
 	if (ret && ret != -EINVAL)
-		dev_err(dev, "Malformed arm,max-msg DT property.\n");
+		dev_dbg(dev, "No arm,max-msg property.\n");
 
 	dev_info(dev,
 		 "SCMI max-rx-timeout: %dms / max-msg-size: %dbytes / max-msg: %d\n",
@@ -3186,7 +3198,7 @@ static int scmi_probe(struct platform_device *pdev)
 	struct scmi_info *info;
 	bool coex = IS_ENABLED(CONFIG_ARM_SCMI_RAW_MODE_SUPPORT_COEX);
 	struct device *dev = &pdev->dev;
-	struct device_node *child, *np = dev->of_node;
+	struct fwnode_handle *child, *np = dev_fwnode(dev);
 
 	desc = scmi_transport_setup(dev);
 	if (!desc) {
@@ -3225,7 +3237,7 @@ static int scmi_probe(struct platform_device *pdev)
 	handle->devm_protocol_put = scmi_devm_protocol_put;
 	handle->is_transport_atomic = scmi_is_transport_atomic;
 
-	/* Setup all channels described in the DT at first */
+	/* Setup all channels described in the DT/ACPI at first */
 	ret = scmi_channels_setup(info);
 	if (ret) {
 		err_str = "failed to setup channels\n";
@@ -3300,35 +3312,65 @@ static int scmi_probe(struct platform_device *pdev)
 
 	scmi_enable_matching_quirks(info);
 
-	for_each_available_child_of_node(np, child) {
-		u32 prot_id;
+	{
+		bool found_children = false;
 
-		if (of_property_read_u32(child, "reg", &prot_id))
-			continue;
+		fwnode_for_each_child_node(np, child) {
+			u32 prot_id;
 
-		if (!FIELD_FIT(MSG_PROTOCOL_ID_MASK, prot_id))
-			dev_err(dev, "Out of range protocol %d\n", prot_id);
+			if (fwnode_property_read_u32(child, "reg", &prot_id))
+				continue;
 
-		if (!scmi_is_protocol_implemented(handle, prot_id)) {
-			dev_err(dev, "SCMI protocol %d not implemented\n",
-				prot_id);
-			continue;
+			found_children = true;
+
+			if (!FIELD_FIT(MSG_PROTOCOL_ID_MASK, prot_id))
+				dev_err(dev, "Out of range protocol %d\n",
+					prot_id);
+
+			if (!scmi_is_protocol_implemented(handle, prot_id)) {
+				dev_err(dev,
+					"SCMI protocol %d not implemented\n",
+					prot_id);
+				continue;
+			}
+
+			ret = idr_alloc(&info->active_protocols, child,
+					prot_id, prot_id + 1, GFP_KERNEL);
+			if (ret != prot_id) {
+				dev_err(dev,
+					"SCMI protocol %d already activated. Skip\n",
+					prot_id);
+				continue;
+			}
+
+			fwnode_handle_get(child);
+			scmi_create_protocol_devices(child, info, prot_id,
+						     NULL);
 		}
 
 		/*
-		 * Save this valid DT protocol descriptor amongst
-		 * @active_protocols for this SCMI instance/
+		 * For ACPI-based systems without protocol child nodes,
+		 * create devices for all firmware-implemented protocols
+		 * using the parent fwnode.
 		 */
-		ret = idr_alloc(&info->active_protocols, child,
-				prot_id, prot_id + 1, GFP_KERNEL);
-		if (ret != prot_id) {
-			dev_err(dev, "SCMI protocol %d already activated. Skip\n",
-				prot_id);
-			continue;
-		}
+		if (!found_children && info->protocols_imp) {
+			int i;
+			struct scmi_revision_info *rev = handle->version;
 
-		of_node_get(child);
-		scmi_create_protocol_devices(child, info, prot_id, NULL);
+			for (i = 0; i < rev->num_protocols; i++) {
+				u8 prot_id = info->protocols_imp[i];
+
+				ret = idr_alloc(&info->active_protocols, np,
+						prot_id, prot_id + 1,
+						GFP_KERNEL);
+				if (ret != prot_id)
+					continue;
+
+				fwnode_handle_get(np);
+				scmi_create_protocol_devices(np, info, prot_id,
+							     NULL);
+			}
+		}
 	}
 
 	return 0;
@@ -3355,7 +3397,7 @@ static void scmi_remove(struct platform_device *pdev)
 {
 	int id;
 	struct scmi_info *info = platform_get_drvdata(pdev);
-	struct device_node *child;
+	struct fwnode_handle *child;
 
 	if (IS_ENABLED(CONFIG_ARM_SCMI_RAW_MODE_SUPPORT))
 		scmi_raw_mode_cleanup(info->raw);
@@ -3374,7 +3416,7 @@ static void scmi_remove(struct platform_device *pdev)
 	mutex_unlock(&info->protocols_mtx);
 
 	idr_for_each_entry(&info->active_protocols, child, id)
-		of_node_put(child);
+		fwnode_handle_put(child);
 	idr_destroy(&info->active_protocols);
 
 	blocking_notifier_chain_unregister(&scmi_requested_devices_nh,
@@ -3498,10 +3540,17 @@ static int __init scmi_driver_init(void)
 	scmi_system_register();
 	scmi_powercap_register();
 	scmi_pinctrl_register();
-
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	scmi_pm_excp_register();
+#endif
 	return platform_driver_register(&scmi_driver);
 }
-module_init(scmi_driver_init);
+
+#ifdef CONFIG_ARCH_CIX
+	subsys_initcall_sync(scmi_driver_init);
+#else
+	module_init(scmi_driver_init);
+#endif
 
 static void __exit scmi_driver_exit(void)
 {
@@ -3516,6 +3565,9 @@ static void __exit scmi_driver_exit(void)
 	scmi_system_unregister();
 	scmi_powercap_unregister();
 	scmi_pinctrl_unregister();
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	scmi_pm_excp_unregister();
+#endif
 
 	platform_driver_unregister(&scmi_driver);
 

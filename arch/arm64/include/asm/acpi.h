@@ -187,5 +187,14 @@ static inline void acpi_map_cpus_to_nodes(void) { }
 #endif /* CONFIG_ACPI_NUMA */
 
 #define ACPI_TABLE_UPGRADE_MAX_PHYS MEMBLOCK_ALLOC_ACCESSIBLE
+static inline unsigned long acpi_get_wakeup_address(void)
+{
+	return 0;
+}
+
+static inline int acpi_suspend_lowlevel(void)
+{
+	return 0;
+}
 
 #endif /*_ASM_ACPI_H*/

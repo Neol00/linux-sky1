@@ -5937,6 +5937,9 @@ int amdgpu_device_reinit_after_reset(struct amdgpu_reset_context *reset_context)
 				if (r)
 					goto out;
 
+				if (tmp_adev->mman.buffer_funcs_ring->sched.ready)
+					amdgpu_ttm_set_buffer_funcs_status(tmp_adev, true);
+
 				if (vram_lost)
 					amdgpu_device_fill_reset_magic(tmp_adev);
 

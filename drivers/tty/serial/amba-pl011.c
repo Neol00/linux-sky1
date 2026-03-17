@@ -16,6 +16,7 @@
  * and hooked into this driver.
  */
 
+#include "linux/stddef.h"
 #include <linux/module.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
@@ -41,6 +42,9 @@
 #include <linux/sizes.h>
 #include <linux/io.h>
 #include <linux/acpi.h>
+#include <linux/regmap.h>
+#include <linux/mfd/syscon.h>
+#include <linux/pm_runtime.h>
 
 #define UART_NR			14
 
@@ -82,6 +86,27 @@ enum {
 	/* The size of the array - must be last */
 	REG_ARRAY_SIZE,
 };
+#define SKY1_RCSU_USBPHY_ADDR_START_G0	0x58
+#define SKY1_RCSU_USBPHY_ADDR_END_G0	0x5c
+#define SKY1_RCSU_USBPHY_STRAP_REG0	0x310
+#define SKY1_EMU_FREQ_MASK		0x1ffff
+#define SKY1_PLAT_CONTROL_ADDR	0x100
+#define SKY1_IPRTL_VIEW_ADDR	0x104
+#define SKY1_EMU_FREQ_MASK	0x1ffff
+
+#define UART_CRU_OFFSET     0x9c
+#define TIMEOUT_VALUE_SET0  (0x9c - UART_CRU_OFFSET)
+#define TIMEOUT_VALUE_SET1  (0xa0 - UART_CRU_OFFSET)
+#define TIMEOUT_VALUE_SET2  (0xa4 - UART_CRU_OFFSET)
+#define TIMEOUT_VALUE_SET3  (0xa8 - UART_CRU_OFFSET)
+#define TIMEOUT_INTR_STA    (0xac - UART_CRU_OFFSET)
+#define TIMEOUT_INTR_CLR    (0xb0 - UART_CRU_OFFSET)
+#define TIMEOUT_INTR_EN     (0xb4 - UART_CRU_OFFSET)
+#define TIMEOUT_FUNC_EN     (0xb8 - UART_CRU_OFFSET)
+
+#define TIMEOUT_UART_BIT(x) ((unsigned int)(1U << (x)))
+
+#define NEED_SAVE_MAX_INDEX 7
 
 static u16 pl011_std_offsets[REG_ARRAY_SIZE] = {
 	[REG_DR] = UART01x_DR,
@@ -116,6 +141,19 @@ struct vendor_data {
 	bool			fixed_options;
 
 	unsigned int (*get_fifosize)(struct amba_device *dev);
+};
+
+struct vendor_cix_data {
+	unsigned int dma_burst;
+};
+
+/*
+ * due to uart have no signal to notify dma stop,so
+ * use bursts of length 1 transfer for both reads and write,
+ * and then there won't be any data remaining in the DMA350 channel FIFO
+ */
+static struct vendor_cix_data vendor_cix = {
+	.dma_burst = 1,
 };
 
 static unsigned int get_fifosize_arm(struct amba_device *dev)
@@ -196,6 +234,11 @@ static u16 pl011_st_offsets[REG_ARRAY_SIZE] = {
 	[REG_ST_ABIMSC] = ST_UART011_ABIMSC,
 };
 
+typedef struct pl011_store_reg {
+	u32 reg;
+	u32 value;
+}PL011_STORE_REG;
+
 static unsigned int get_fifosize_st(struct amba_device *dev)
 {
 	return 64;
@@ -273,6 +316,11 @@ struct uart_amba_port {
 	struct hrtimer		trigger_start_tx;
 	struct hrtimer		trigger_stop_tx;
 	bool			console_line_ended;
+#ifdef CONFIG_ARCH_CIX_EMU_FPGA
+	struct regmap		*dbg_reg;
+#endif
+	struct regmap		*fch_cru;
+	PL011_STORE_REG  need_save_reg[NEED_SAVE_MAX_INDEX];
 #ifdef CONFIG_DMA_ENGINE
 	/* DMA stuff */
 	unsigned int		dmacr;		/* dma control reg */
@@ -281,6 +329,8 @@ struct uart_amba_port {
 	struct pl011_dmarx_data dmarx;
 	struct pl011_dmatx_data	dmatx;
 	bool			dma_probed;
+	bool use_sky1_dma_pause;
+	unsigned int timeout_value;
 #endif
 };
 
@@ -401,6 +451,7 @@ static void pl011_dma_probe(struct uart_amba_port *uap)
 	/* DMA is the sole user of the platform data right now */
 	struct amba_pl011_data *plat = dev_get_platdata(uap->port.dev);
 	struct device *dev = uap->port.dev;
+	struct dma_slave_caps caps;
 	struct dma_slave_config tx_conf = {
 		.dst_addr = uap->port.mapbase +
 				 pl011_reg_to_offset(uap, REG_DR),
@@ -465,7 +516,8 @@ static void pl011_dma_probe(struct uart_amba_port *uap)
 			.src_maxburst = uap->fifosize >> 2,
 			.device_fc = false,
 		};
-		struct dma_slave_caps caps;
+		if (uap->use_sky1_dma_pause)
+			rx_conf.src_maxburst = vendor_cix.dma_burst;
 
 		/*
 		 * Some DMA controllers provide information on their capabilities.
@@ -618,7 +670,9 @@ static int pl011_dma_tx_refill(struct uart_amba_port *uap)
 	 * Bodge: don't send the last character by DMA, as this
 	 * will prevent XON from notifying us to restart DMA.
 	 */
-	count -= 1;
+	if(uap->use_sky1_dma_pause == false) {
+		count -= 1;
+	}
 
 	/* Else proceed to copy the TX chars to the DMA buffer and fire DMA */
 	if (count > PL011_DMA_BUFFER_SIZE)
@@ -811,6 +865,30 @@ __acquires(&uap->port.lock)
 
 static void pl011_dma_rx_callback(void *data);
 
+static void pl011_dma_timeout_enable(struct uart_amba_port *uap,bool enable)
+{
+	unsigned int ret, timeout_val;
+
+	if(enable) {
+		ret = regmap_read(uap->fch_cru,
+				TIMEOUT_VALUE_SET0 + 0x4 * uap->port.line, &timeout_val);
+		if(!ret) {
+			if(timeout_val != uap->timeout_value)
+				regmap_write(uap->fch_cru,
+						TIMEOUT_VALUE_SET0 + 0x4 * uap->port.line, uap->timeout_value);
+		} else {
+			dev_err(uap->port.dev, "%s read timeout reg failed!\n", __func__);
+		}
+
+		regmap_set_bits(uap->fch_cru, TIMEOUT_INTR_EN, 1 << uap->port.line);
+		regmap_set_bits(uap->fch_cru, TIMEOUT_FUNC_EN, 1 << uap->port.line);
+	}
+	else {
+		regmap_clear_bits(uap->fch_cru, TIMEOUT_FUNC_EN, 1 << uap->port.line);
+		regmap_clear_bits(uap->fch_cru, TIMEOUT_INTR_EN, 1 << uap->port.line);
+	}
+}
+
 static int pl011_dma_rx_trigger_dma(struct uart_amba_port *uap)
 {
 	struct dma_chan *rxchan = uap->dmarx.chan;
@@ -837,6 +915,10 @@ static int pl011_dma_rx_trigger_dma(struct uart_amba_port *uap)
 		dmaengine_terminate_all(rxchan);
 		return -EBUSY;
 	}
+
+	/*if uap->use_sky1_dma_pause == ture, should enable timeout interupt function*/
+	if (uap->use_sky1_dma_pause)
+		pl011_dma_timeout_enable(uap,true);
 
 	/* Some data to go along to the callback */
 	desc->callback = pl011_dma_rx_callback;
@@ -938,6 +1020,8 @@ static void pl011_dma_rx_irq(struct uart_amba_port *uap)
 	struct dma_tx_state state;
 	enum dma_status dmastat;
 
+	if (uap->use_sky1_dma_pause)
+		pl011_dma_timeout_enable(uap,false);
 	/*
 	 * Pause the transfer so we can trust the current counter,
 	 * do this before we pause the PL011 block, else we may
@@ -987,7 +1071,10 @@ static void pl011_dma_rx_callback(void *data)
 	size_t pending;
 	struct dma_tx_state state;
 	int ret;
+	unsigned long flags;
 
+	if (uap->use_sky1_dma_pause)
+		pl011_dma_timeout_enable(uap,false);
 	/*
 	 * This completion interrupt occurs typically when the
 	 * RX buffer is totally stuffed but no timeout has yet
@@ -995,7 +1082,7 @@ static void pl011_dma_rx_callback(void *data)
 	 * routine to flush out the secondary DMA buffer while
 	 * we immediately trigger the next DMA job.
 	 */
-	uart_port_lock_irq(&uap->port);
+	uart_port_lock_irqsave(&uap->port, &flags);
 	/*
 	 * Rx data can be taken by the UART interrupts during
 	 * the DMA irq handler. So we check the residue here.
@@ -1169,6 +1256,11 @@ static void pl011_dma_shutdown(struct uart_amba_port *uap)
 {
 	if (!(uap->using_tx_dma || uap->using_rx_dma))
 		return;
+
+	if(uap->use_sky1_dma_pause) {
+		pl011_dma_timeout_enable(uap, false);
+		uap->dmarx.running = false;
+	}
 
 	/* Disable RX and TX DMA */
 	while (pl011_read(uap, REG_FR) & uap->vendor->fr_busy)
@@ -1780,8 +1872,18 @@ static int pl011_hwinit(struct uart_port *port)
 	retval = clk_prepare_enable(uap->clk);
 	if (retval)
 		return retval;
-
+#ifdef CONFIG_ARCH_CIX_EMU_FPGA
+	if (!IS_ERR_OR_NULL(uap->dbg_reg)) {
+		regmap_read(uap->dbg_reg, SKY1_PLAT_CONTROL_ADDR, &uap->port.uartclk);
+		uap->port.uartclk &= SKY1_EMU_FREQ_MASK;
+		uap->port.uartclk *= 1000;
+	} else if (!device_property_read_u32(port->dev, "uartclk", &uap->port.uartclk)) {
+		uap->port.uartclk &= SKY1_EMU_FREQ_MASK;
+		uap->port.uartclk *= 1000;
+	}
+#else
 	uap->port.uartclk = clk_get_rate(uap->clk);
+#endif
 
 	/* Clear pending error and receive interrupts */
 	pl011_write(UART011_OEIS | UART011_BEIS | UART011_PEIS |
@@ -1878,6 +1980,8 @@ static void pl011_unthrottle_rx(struct uart_port *port)
 	uap->im = UART011_RTIM;
 	if (!pl011_dma_rx_running(uap))
 		uap->im |= UART011_RXIM;
+       if(uap->use_sky1_dma_pause)
+                 uap->im &= ~(UART011_RTIM | UART011_RXIM);
 
 	pl011_write(uap->im, uap, REG_IMSC);
 
@@ -2301,6 +2405,19 @@ static int pl011_rs485_config(struct uart_port *port, struct ktermios *termios,
 	return 0;
 }
 
+static void pl011_pm(struct uart_port *port, unsigned int state,
+			   unsigned int oldstate)
+{
+	switch (state) {
+	case UART_PM_STATE_ON:
+		pm_runtime_get_sync(port->dev);
+		break;
+	case UART_PM_STATE_OFF:
+		pm_runtime_put_sync(port->dev);
+		break;
+	}
+}
+
 static const struct uart_ops amba_pl011_pops = {
 	.tx_empty	= pl011_tx_empty,
 	.set_mctrl	= pl011_set_mctrl,
@@ -2316,6 +2433,7 @@ static const struct uart_ops amba_pl011_pops = {
 	.shutdown	= pl011_shutdown,
 	.flush_buffer	= pl011_dma_flush_buffer,
 	.set_termios	= pl011_set_termios,
+	.pm			= pl011_pm,
 	.type		= pl011_type,
 	.config_port	= pl011_config_port,
 	.verify_port	= pl011_verify_port,
@@ -2440,8 +2558,18 @@ static int pl011_console_setup(struct console *co, char *options)
 			plat->init();
 	}
 
+#ifdef CONFIG_ARCH_CIX_EMU_FPGA
+	if (!IS_ERR_OR_NULL(uap->dbg_reg)) {
+		regmap_read(uap->dbg_reg, SKY1_PLAT_CONTROL_ADDR, &uap->port.uartclk);
+		uap->port.uartclk &= SKY1_EMU_FREQ_MASK;
+		uap->port.uartclk *= 1000;
+	} else if (!device_property_read_u32(uap->port.dev, "uartclk", &uap->port.uartclk)) {
+		uap->port.uartclk &= SKY1_EMU_FREQ_MASK;
+		uap->port.uartclk *= 1000;
+	}
+#else
 	uap->port.uartclk = clk_get_rate(uap->clk);
-
+#endif
 	if (uap->vendor->fixed_options) {
 		baud = uap->fixed_baud;
 	} else {
@@ -2879,7 +3007,7 @@ static int pl011_probe(struct amba_device *dev, const struct amba_id *id)
 	struct uart_amba_port *uap;
 	struct vendor_data *vendor = id->data;
 	int portnr, ret;
-	u32 val;
+	u32 val, timeout;
 
 	portnr = pl011_find_free_port();
 	if (portnr < 0)
@@ -2894,6 +3022,12 @@ static int pl011_probe(struct amba_device *dev, const struct amba_id *id)
 	if (IS_ERR(uap->clk))
 		return PTR_ERR(uap->clk);
 
+#ifdef CONFIG_ARCH_CIX_EMU_FPGA
+	uap->dbg_reg = syscon_regmap_lookup_by_compatible("sky1,csu_se_pub");
+	if (IS_ERR(uap->dbg_reg)) {
+		dev_err(&dev->dev, "regmap for sky1,csu_se_pub lookup failed\n");
+	}
+#endif
 	uap->reg_offset = vendor->reg_offset;
 	uap->vendor = vendor;
 	uap->fifosize = vendor->get_fifosize(dev);
@@ -2927,9 +3061,27 @@ static int pl011_probe(struct amba_device *dev, const struct amba_id *id)
 	if (ret)
 		return ret;
 
-	amba_set_drvdata(dev, uap);
+	if(of_property_read_bool((&dev->dev)->of_node,"timeout-enable")) {
 
-	return pl011_register_port(uap);
+                uap->fch_cru = syscon_regmap_lookup_by_compatible("sky1,fch_cru");
+                if (IS_ERR(uap->fch_cru)) {
+
+                /* if find no timeout-enable or fch_cru node,do not start sky1 dma*/
+                        uap->use_sky1_dma_pause = false;
+                } else {
+                       if(of_property_read_u32((&dev->dev)->of_node, "timeout-value",  &timeout) == 0) {
+                                uap->timeout_value = timeout;
+				uap->use_sky1_dma_pause = true;
+			}
+                }
+        }
+
+	amba_set_drvdata(dev, uap);
+	ret = pl011_register_port(uap);
+	if(!ret)
+		pm_runtime_put_sync(&dev->dev);
+
+	return ret;
 }
 
 static void pl011_remove(struct amba_device *dev)
@@ -2941,28 +3093,166 @@ static void pl011_remove(struct amba_device *dev)
 }
 
 #ifdef CONFIG_PM_SLEEP
+static void pl011_suspend_prepare(struct uart_amba_port *uap)
+{
+	uap->need_save_reg[0].reg = REG_IBRD;
+	uap->need_save_reg[0].value = pl011_read(uap, REG_IBRD);
+	uap->need_save_reg[1].reg = REG_FBRD;
+	uap->need_save_reg[1].value = pl011_read(uap, REG_FBRD);
+	uap->need_save_reg[2].reg = REG_LCRH_RX;
+	uap->need_save_reg[2].value = pl011_read(uap, REG_LCRH_RX);
+	uap->need_save_reg[3].reg = REG_CR;
+	uap->need_save_reg[3].value = pl011_read(uap, REG_CR);
+	uap->need_save_reg[4].reg = REG_IFLS;
+	uap->need_save_reg[4].value = pl011_read(uap, REG_IFLS);
+	uap->need_save_reg[5].reg = REG_IMSC;
+	uap->need_save_reg[5].value = pl011_read(uap, REG_IMSC);
+	uap->need_save_reg[6].reg = REG_DMACR;
+	uap->need_save_reg[6].value = pl011_read(uap, REG_DMACR);
+}
+
 static int pl011_suspend(struct device *dev)
 {
+	int ret = 0;
 	struct uart_amba_port *uap = dev_get_drvdata(dev);
 
 	if (!uap)
 		return -EINVAL;
 
-	return uart_suspend_port(&amba_reg, &uap->port);
+	if (!uart_console(&uap->port))
+		pm_runtime_put_noidle((&uap->port)->dev);
+
+	ret = uart_suspend_port(&amba_reg, &uap->port);
+	if (ret) {
+		dev_err(dev, "%s uart_suspend_port failed!\n", __func__);
+		return ret;
+	}
+
+	pm_runtime_get_sync(dev);
+	pl011_suspend_prepare(uap);
+	pm_runtime_put_sync(dev);
+
+	return ret;
+}
+
+static void pl011_resume_prepare(struct uart_amba_port *uap)
+{
+	int index = 0;
+
+	pl011_write(0, uap, REG_IMSC);
+	pl011_write(0xffff, uap, REG_ICR);
+
+	while (index < NEED_SAVE_MAX_INDEX) {
+		pl011_write(uap->need_save_reg[index].value, uap,
+			    uap->need_save_reg[index].reg);
+		index++;
+	}
 }
 
 static int pl011_resume(struct device *dev)
 {
+	int ret = 0;
 	struct uart_amba_port *uap = dev_get_drvdata(dev);
 
 	if (!uap)
 		return -EINVAL;
 
-	return uart_resume_port(&amba_reg, &uap->port);
+	pm_runtime_get_sync(dev);
+	pl011_resume_prepare(uap);
+	pm_runtime_put_sync(dev);
+
+	ret = uart_resume_port(&amba_reg, &uap->port);
+	if (ret) {
+		dev_err(dev, "%s uart_resume_port failed!\n", __func__);
+		return ret;
+	}
+
+	if (!uart_console(&uap->port))
+		pm_runtime_get_noresume((&uap->port)->dev);
+
+	return ret;
+}
+
+static int pl011_freeze(struct device *dev)
+{
+	int ret = 0;
+	struct uart_amba_port *uap = dev_get_drvdata(dev);
+
+	if (!uap)
+		return -EINVAL;
+
+	if (uart_console(&uap->port) && !console_suspend_enabled) {
+		disable_irq(uap->port.irq);
+	} else {
+		if (!uart_console(&uap->port))
+			pm_runtime_put_noidle((&uap->port)->dev);
+
+		ret = uart_suspend_port(&amba_reg, &uap->port);
+		if (ret) {
+			dev_err(dev, "%s uart_suspend_port failed!\n", __func__);
+			return ret;
+		}
+	}
+
+	return ret;
+}
+
+static int pl011_restore(struct device *dev)
+{
+	int ret = 0;
+	struct uart_amba_port *uap = dev_get_drvdata(dev);
+
+	if (!uap)
+		return -EINVAL;
+
+	if (uart_console(&uap->port) && !console_suspend_enabled) {
+		enable_irq(uap->port.irq);
+	} else {
+		ret = uart_resume_port(&amba_reg, &uap->port);
+		if (ret) {
+			dev_err(dev, "%s uart_resume_port failed!\n", __func__);
+			return ret;
+		}
+
+		if (!uart_console(&uap->port))
+			pm_runtime_get_noresume((&uap->port)->dev);
+	}
+
+	return ret;
+}
+
+static int pl011_thaw(struct device *dev)
+{
+	int ret = 0;
+	struct uart_amba_port *uap = dev_get_drvdata(dev);
+
+	if (!uap)
+		return -EINVAL;
+
+	if (uart_console(&uap->port) && !console_suspend_enabled) {
+		enable_irq(uap->port.irq);
+	} else {
+		ret = uart_resume_port(&amba_reg, &uap->port);
+		if (ret) {
+			dev_err(dev, "%s uart_resume_port failed!\n", __func__);
+			return ret;
+		}
+
+		if (!uart_console(&uap->port))
+			pm_runtime_get_noresume((&uap->port)->dev);
+	}
+
+	return ret;
 }
 #endif
 
-static SIMPLE_DEV_PM_OPS(pl011_dev_pm_ops, pl011_suspend, pl011_resume);
+static const struct dev_pm_ops pl011_dev_pm_ops = {
+	.suspend = pl011_suspend,
+	.resume  = pl011_resume,
+	.restore = pl011_restore,
+	.freeze  = pl011_freeze,
+	.thaw    = pl011_thaw,
+};
 
 #ifdef CONFIG_ACPI_SPCR_TABLE
 static void qpdf2400_erratum44_workaround(struct device *dev,
@@ -2986,6 +3276,7 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 	struct resource *r;
 	int portnr, ret;
 	int baudrate;
+	int timeout;
 
 	/*
 	 * Check the mandatory baud rate parameter in the DT node early
@@ -3001,7 +3292,24 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 		baudrate = 115200;
 	}
 
-	portnr = pl011_find_free_port();
+	/*
+	 * For ACPI, use UID - 1 as port index so ttyAMA numbering is
+	 * stable regardless of which UARTs are enabled.
+	 */
+	if (ACPI_COMPANION(&pdev->dev)) {
+		unsigned long long uid;
+
+		if (acpi_evaluate_integer(ACPI_HANDLE(&pdev->dev),
+					  "_UID", NULL, &uid) == AE_OK &&
+		    uid > 0 && uid <= UART_NR &&
+		    !amba_ports[uid - 1]) {
+			portnr = uid - 1;
+		} else {
+			portnr = pl011_find_free_port();
+		}
+	} else {
+		portnr = pl011_find_free_port();
+	}
 	if (portnr < 0)
 		return portnr;
 
@@ -3010,18 +3318,23 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 	if (!uap)
 		return -ENOMEM;
 
+	uap->clk = devm_clk_get(&pdev->dev, "uartclk");
+	if (IS_ERR(uap->clk)) {
+		dev_err(&pdev->dev, "uart get clk failed\n");
+		return PTR_ERR(uap->clk);
+	}
+
 	ret = platform_get_irq(pdev, 0);
 	if (ret < 0)
 		return ret;
 	uap->port.irq	= ret;
 
-	uap->vendor = &vendor_sbsa;
-	qpdf2400_erratum44_workaround(&pdev->dev, uap);
+	uap->vendor = &vendor_arm;
 
 	uap->reg_offset	= uap->vendor->reg_offset;
 	uap->fifosize	= 32;
 	uap->port.iotype = uap->vendor->access_32b ? UPIO_MEM32 : UPIO_MEM;
-	uap->port.ops	= &sbsa_uart_pops;
+	uap->port.ops	= &amba_pl011_pops;
 	uap->fixed_baud = baudrate;
 
 	snprintf(uap->type, sizeof(uap->type), "SBSA");
@@ -3031,6 +3344,18 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 	ret = pl011_setup_port(&pdev->dev, uap, r, portnr);
 	if (ret)
 		return ret;
+
+	if (!device_property_read_u32(&pdev->dev, "timeout-value", &timeout)) {
+		uap->fch_cru =
+			device_syscon_regmap_lookup_by_property(&pdev->dev, "sky1,fch_cru");
+		if (IS_ERR_OR_NULL(uap->fch_cru)) {
+			uap->use_sky1_dma_pause = false;
+		} else {
+			uap->timeout_value = timeout;
+			uap->use_sky1_dma_pause = true;
+		}
+		dev_info(&pdev->dev, "use_sky1_dma_pause: %d\n", uap->use_sky1_dma_pause);
+	}
 
 	platform_set_drvdata(pdev, uap);
 
@@ -3116,7 +3441,7 @@ static void __exit pl011_exit(void)
  * While this can be a module, if builtin it's most likely the console
  * So let's leave module_exit but move module_init to an earlier place
  */
-arch_initcall(pl011_init);
+module_init(pl011_init);
 module_exit(pl011_exit);
 
 MODULE_AUTHOR("ARM Ltd/Deep Blue Solutions Ltd");

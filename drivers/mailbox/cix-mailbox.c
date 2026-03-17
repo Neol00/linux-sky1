@@ -3,6 +3,7 @@
  * Copyright 2025 Cix Technology Group Co., Ltd.
  */
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/io.h>
@@ -561,7 +562,7 @@ static int cix_mbox_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct cix_mbox_priv *priv;
 	struct resource *res;
-	const char *dir_str;
+	u32 dir;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -589,19 +590,17 @@ static int cix_mbox_probe(struct platform_device *pdev)
 	if (priv->irq < 0)
 		return priv->irq;
 
-	if (device_property_read_string(dev, "cix,mbox-dir", &dir_str)) {
+	if (device_property_read_u32(dev, "cix,mbox_dir", &dir)) {
 		dev_err(priv->dev, "cix,mbox_dir property not found\n");
 		return -EINVAL;
 	}
 
-	if (!strcmp(dir_str, "tx"))
-		priv->dir = 0;
-	else if (!strcmp(dir_str, "rx"))
-		priv->dir = 1;
-	else {
-		dev_err(priv->dev, "cix,mbox_dir=%s is not expected\n", dir_str);
+	if (dir != CIX_MBOX_TX && dir != CIX_MBOX_RX) {
+		dev_err(priv->dev, "cix,mbox_dir=%d is not expected\n", dir);
 		return -EINVAL;
 	}
+
+	priv->dir = dir;
 
 	cix_mbox_init(priv);
 
@@ -626,11 +625,18 @@ static const struct of_device_id cix_mbox_dt_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, cix_mbox_dt_ids);
 
+static const struct acpi_device_id cix_mbox_acpi_match[] = {
+	{ "CIXHA001", 0 }, /* sky1 mailbox */
+	{ },
+};
+MODULE_DEVICE_TABLE(acpi, cix_mbox_acpi_match);
+
 static struct platform_driver cix_mbox_driver = {
 	.probe = cix_mbox_probe,
 	.driver = {
 		.name = "cix_mbox",
 		.of_match_table = cix_mbox_dt_ids,
+		.acpi_match_table = ACPI_PTR(cix_mbox_acpi_match),
 	},
 };
 

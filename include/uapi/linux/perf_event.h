@@ -18,6 +18,9 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 #include <asm/byteorder.h>
+#if defined(CONFIG_PLAT_HW_BREAKPOINT) && defined(__KERNEL__)
+#include <linux/soc/cix/plat_hw_breakpoint.h>
+#endif
 
 /*
  * User-space ABI bits:

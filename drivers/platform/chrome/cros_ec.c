@@ -130,6 +130,38 @@ static bool cros_ec_handle_event(struct cros_ec_device *ec_dev)
 	return ec_has_more_events;
 }
 
+#ifdef CONFIG_CIX_EC
+/**
+ * cix_ec_get_irq_info() - get irq info from EC
+ * @ec_dev: Device which raise the irq
+ */
+
+int cix_ec_get_irq_info(struct cros_ec_device *ec_dev)
+{
+	int rc = 0;
+	struct {
+		struct cros_ec_command msg;
+		struct ec_response_int_get_info resp;
+	} __packed buf;
+	struct ec_response_int_get_info *resp = &buf.resp;
+	struct cros_ec_command *msg = &buf.msg;
+
+	memset(&buf, 0, sizeof(buf));
+	msg->version = 0;
+	msg->command = EC_CMD_INT_GET_INFO;
+	msg->insize = sizeof(*resp);
+	msg->outsize = 0;
+	rc = cros_ec_cmd_xfer_status(ec_dev, msg);
+	if (rc < 0)
+		printk("cix ec: get irq info failed");
+
+	ec_dev->irq_info.type = resp->type;
+	ec_dev->irq_info.data = ec_be32_to_cpu(resp->data);
+
+	return rc;
+}
+#endif
+
 /**
  * cros_ec_irq_thread() - bottom half part of the interrupt handler
  * @irq: IRQ id
@@ -140,12 +172,20 @@ static bool cros_ec_handle_event(struct cros_ec_device *ec_dev)
 irqreturn_t cros_ec_irq_thread(int irq, void *data)
 {
 	struct cros_ec_device *ec_dev = data;
+#ifdef CONFIG_CIX_EC
+	int rc = cix_ec_get_irq_info(ec_dev);
+	if (rc < 0)
+		return IRQ_NONE;
+	else
+		blocking_notifier_call_chain(&ec_dev->event_notifier,
+					     0, ec_dev);
+#else
 	bool ec_has_more_events;
 
 	do {
 		ec_has_more_events = cros_ec_handle_event(ec_dev);
 	} while (ec_has_more_events);
-
+#endif
 	return IRQ_HANDLED;
 }
 EXPORT_SYMBOL(cros_ec_irq_thread);
@@ -247,7 +287,11 @@ int cros_ec_register(struct cros_ec_device *ec_dev)
 		err = devm_request_threaded_irq(dev, ec_dev->irq,
 						cros_ec_irq_handler,
 						cros_ec_irq_thread,
+#ifdef CONFIG_CIX_EC
+						IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+#else
 						IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+#endif
 						"chromeos-ec", ec_dev);
 		if (err) {
 			dev_err(dev, "Failed to request IRQ %d: %d\n",
@@ -513,8 +557,19 @@ EXPORT_SYMBOL(cros_ec_resume_early);
  */
 int cros_ec_resume(struct cros_ec_device *ec_dev)
 {
+#ifdef CONFIG_CIX_EC
+	int ret;
+#endif
+
 	cros_ec_resume_early(ec_dev);
 	cros_ec_resume_complete(ec_dev);
+#ifdef CONFIG_CIX_EC
+	ret = cix_ec_get_irq_info(ec_dev);
+	if (ret < 0)
+		dev_err(ec_dev->dev,"Failed: clear interrupts from str wakeup!\n");
+	else
+		blocking_notifier_call_chain(&ec_dev->event_notifier, 0, ec_dev);
+#endif
 	return 0;
 }
 EXPORT_SYMBOL(cros_ec_resume);

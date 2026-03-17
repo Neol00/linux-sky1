@@ -33,6 +33,9 @@
 #include <asm/sysreg.h>
 #include <asm/trans_pgd.h>
 #include <asm/virt.h>
+#ifdef CONFIG_SOC_CIX
+#include <linux/soc/cix/cix_hibernate.h>
+#endif
 
 /*
  * Hibernate core relies on this value being 0 on resume, and marks it
@@ -347,6 +350,11 @@ int swsusp_arch_suspend(void)
 		/* make the crash dump kernel image visible/saveable */
 		crash_prepare_suspend();
 
+#ifdef CONFIG_SOC_CIX
+		ret = reserve_mem_suspend();
+		if (ret)
+			return ret;
+#endif
 		ret = swsusp_mte_save_tags();
 		if (ret)
 			return ret;
@@ -371,6 +379,9 @@ int swsusp_arch_suspend(void)
 
 		swsusp_mte_restore_tags();
 
+#ifdef CONFIG_SOC_CIX
+		reserve_mem_resume();
+#endif
 		/* make the crash dump kernel image protected again */
 		crash_post_resume();
 

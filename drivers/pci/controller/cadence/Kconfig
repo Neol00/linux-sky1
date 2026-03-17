@@ -42,6 +42,9 @@ config PCIE_CADENCE_PLAT_EP
 	  endpoint mode. This PCIe controller may be embedded into many
 	  different vendors SoCs.
 
+config PCI_SKY1
+	bool
+
 config PCI_SKY1_HOST
 	tristate "CIX SKY1 PCIe controller (host mode)"
 	depends on OF && (ARCH_CIX || COMPILE_TEST)

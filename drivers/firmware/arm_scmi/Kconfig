@@ -87,6 +87,18 @@ source "drivers/firmware/arm_scmi/vendors/imx/Kconfig"
 
 endif #ARM_SCMI_PROTOCOL
 
+config ARM_SCMI_PERF_DOMAIN
+	tristate "SCMI performance domain driver"
+	depends on ARM_SCMI_PROTOCOL || (COMPILE_TEST && OF)
+	default y
+	select PM_GENERIC_DOMAINS if PM
+	help
+	  This enables support for the SCMI performance domains which can be
+	  enabled or disabled via the SCP firmware.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called scmi_perf_domain.
+
 config ARM_SCMI_POWER_CONTROL
 	tristate "SCMI system power control driver"
 	depends on ARM_SCMI_PROTOCOL || (COMPILE_TEST && OF)
@@ -98,5 +110,16 @@ config ARM_SCMI_POWER_CONTROL
 	  This driver can also be built as a module.  If so, the module will be
 	  called scmi_power_control. Note this may needed early in boot to catch
 	  early shutdown/reboot SCMI requests.
+
+config SCMI_CUSTOMIZED
+	tristate "SCMI CUSTOMIZED For PM"
+	depends on ARM_SCMI_PROTOCOL || (COMPILE_TEST && OF)
+
+config ARM_SCMI_SUPPORT_DT_ACPI
+	tristate "ARM SCMI supports both DT and ACPI or only support DT"
+	default n
+	select PM_GENERIC_DOMAINS if PM
+	help
+	  This enables all implemented protocols to support for DT and ACPI.
 
 endmenu

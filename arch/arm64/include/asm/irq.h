@@ -8,9 +8,6 @@
 
 #include <asm-generic/irq.h>
 
-void arch_trigger_cpumask_backtrace(const cpumask_t *mask, int exclude_cpu);
-#define arch_trigger_cpumask_backtrace arch_trigger_cpumask_backtrace
-
 struct pt_regs;
 
 int set_handle_irq(void (*handle_irq)(struct pt_regs *));
@@ -21,6 +18,12 @@ static inline int nr_legacy_irqs(void)
 {
 	return 0;
 }
+
+#ifdef CONFIG_SMP
+extern void arch_trigger_cpumask_backtrace(const cpumask_t *mask,
+					   bool exclude_self);
+#define arch_trigger_cpumask_backtrace arch_trigger_cpumask_backtrace
+#endif
 
 #endif /* !__ASSEMBLER__ */
 #endif

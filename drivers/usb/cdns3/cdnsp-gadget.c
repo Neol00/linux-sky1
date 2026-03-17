@@ -241,9 +241,11 @@ int cdnsp_halt(struct cdnsp_device *pdev)
  * device controller died, register read returns 0xffffffff, or command never
  * ends.
  */
-void cdnsp_died(struct cdnsp_device *pdev)
+void cdnsp_died(struct cdnsp_device *pdev, bool show_msg)
 {
-	dev_err(pdev->dev, "ERROR: CDNSP controller not responding\n");
+	if (show_msg)
+		dev_err(pdev->dev, "ERROR: CDNSP controller not responding\n");
+
 	pdev->cdnsp_state |= CDNSP_STATE_DYING;
 	cdnsp_halt(pdev);
 }
@@ -1998,9 +2000,9 @@ static void cdnsp_gadget_exit(struct cdns *cdns)
 {
 	struct cdnsp_device *pdev = cdns->gadget_dev;
 
-	devm_free_irq(pdev->dev, cdns->dev_irq, pdev);
 	pm_runtime_put_autosuspend(cdns->dev);
 	usb_del_gadget(&pdev->gadget);
+	devm_free_irq(pdev->dev, cdns->dev_irq, pdev);
 	cdnsp_gadget_free_endpoints(pdev);
 	usb_put_gadget(&pdev->gadget);
 	cdnsp_mem_cleanup(pdev);
@@ -2051,6 +2053,23 @@ static int cdnsp_gadget_resume(struct cdns *cdns, bool lost_power)
 	return ret;
 }
 
+static int cdnsp_gadget_restore(struct cdns *cdns)
+{
+        struct cdnsp_device *pdev = cdns->gadget_dev;
+        int ret;
+
+        ret = cdnsp_halt(pdev);
+        if (ret)
+                return ret;
+
+        ret = cdnsp_reset(pdev);
+        if (ret)
+                return ret;
+
+        cdnsp_gadget_exit(cdns);
+        return __cdnsp_gadget_init(cdns);
+}
+
 /**
  * cdnsp_gadget_init - initialize device structure
  * @cdns: cdnsp instance
@@ -2069,6 +2088,7 @@ int cdnsp_gadget_init(struct cdns *cdns)
 	rdrv->stop	= cdnsp_gadget_exit;
 	rdrv->suspend	= cdnsp_gadget_suspend;
 	rdrv->resume	= cdnsp_gadget_resume;
+	rdrv->restore	= cdnsp_gadget_restore;
 	rdrv->state	= CDNS_ROLE_STATE_INACTIVE;
 	rdrv->name	= "gadget";
 	cdns->roles[USB_ROLE_DEVICE] = rdrv;

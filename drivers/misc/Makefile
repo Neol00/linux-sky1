@@ -75,3 +75,7 @@ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
 obj-y				+= keba/
 obj-y				+= amd-sbi/
 obj-$(CONFIG_MISC_RP1)		+= rp1/
+obj-$(CONFIG_CIX_SENSORHUB)		+= cix/sensor/core/
+obj-$(CONFIG_CIX_KERNEL_SENSORHUB)	+= cix/sensor/cix_sensorhub/
+obj-$(CONFIG_CIX_HF_TEST_CASE) += cix/sensor/test/
+obj-$(CONFIG_CIX_SF_SCP_SUPPORT) += cix/sensor/scp/

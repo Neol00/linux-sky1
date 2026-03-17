@@ -294,6 +294,61 @@ int simple_util_parse_clk(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(simple_util_parse_clk);
 
+int simple_util_parse_pa(struct device *dev,
+			 struct device_node *np,
+			 struct simple_util_dai *simple_dai)
+{
+	int ret;
+
+	if (!of_property_read_bool(np, "pd-gpio,pa"))
+		return 0;
+
+	simple_dai->pdb0_gpiod = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np),
+						       "pdb0", GPIOD_OUT_HIGH, "pdb0");
+	if (IS_ERR(simple_dai->pdb0_gpiod)) {
+		ret = PTR_ERR(simple_dai->pdb0_gpiod);
+		dev_err(dev, "failed to get pdb0 gpio, ret: %d\n", ret);
+		return ret;
+	}
+
+	simple_dai->pdb1_gpiod = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np),
+						       "pdb1", GPIOD_OUT_HIGH, "pdb1");
+	if (IS_ERR(simple_dai->pdb1_gpiod)) {
+		ret = PTR_ERR(simple_dai->pdb1_gpiod);
+		dev_err(dev, "failed to get pdb1 gpio: %d\n", ret);
+		return ret;
+	}
+
+	simple_dai->pdb2_gpiod = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np),
+						       "pdb2", GPIOD_OUT_HIGH, "pdb2");
+	if (IS_ERR(simple_dai->pdb2_gpiod)) {
+		ret = PTR_ERR(simple_dai->pdb2_gpiod);
+		dev_err(dev, "failed to get pdb2 gpio: %d\n", ret);
+		return ret;
+	}
+
+	simple_dai->pdb3_gpiod = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np),
+						       "pdb3", GPIOD_OUT_HIGH, "pdb3");
+	if (IS_ERR(simple_dai->pdb3_gpiod)) {
+		ret = PTR_ERR(simple_dai->pdb3_gpiod);
+		dev_err(dev, "failed to get pdb3 gpio: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(simple_util_parse_pa);
+
+void simple_util_parse_jack(struct device_node *np,
+			    struct simple_util_dai *simple_dai)
+{
+	if (of_property_read_bool(np, "jack-det,hs")) {
+		simple_dai->hs_jack.pin.pin = "Headset";
+		simple_dai->hs_jack.pin.mask = SND_JACK_HEADSET;
+	}
+}
+EXPORT_SYMBOL_GPL(simple_util_parse_jack);
+
 static int simple_check_fixed_sysclk(struct device *dev,
 					  struct simple_util_dai *dai,
 					  unsigned int *fixed_sysclk)
@@ -657,6 +712,7 @@ int simple_util_dai_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct simple_util_priv *priv = snd_soc_card_get_drvdata(rtd->card);
 	struct simple_dai_props *props = runtime_simple_priv_to_props(priv, rtd);
+	struct device *dev = simple_priv_to_dev(priv);
 	struct simple_util_dai *dai;
 	int i, ret;
 
@@ -672,6 +728,25 @@ int simple_util_dai_init(struct snd_soc_pcm_runtime *rtd)
 	}
 
 	ret = simple_init_for_codec2codec(priv, rtd, props);
+	if (ret < 0)
+		goto end;
+
+	for_each_prop_dai_codec(props, i, dai) {
+		if (dai->hs_jack.pin.mask) {
+			ret = snd_soc_card_jack_new(rtd->card,
+						    dai->hs_jack.pin.pin,
+						    dai->hs_jack.pin.mask,
+						    &dai->hs_jack.jack);
+			if (ret < 0) {
+				dev_err(dev, "cannot new headset jack: %d\n", ret);
+				goto end;
+			}
+
+			snd_soc_component_set_jack(snd_soc_rtd_to_codec(rtd, i)->component,
+						   &dai->hs_jack.jack, NULL);
+		}
+	}
+
 end:
 	return simple_ret(priv, ret);
 }

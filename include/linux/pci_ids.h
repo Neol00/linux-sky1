@@ -3257,4 +3257,7 @@
 
 #define PCI_VENDOR_ID_NCUBE		0x10ff
 
+#define PCI_VENDOR_ID_CIX		0x1f6c
+#define PCI_DEVICE_ID_CIX_SKY1	0x0001
+
 #endif /* _LINUX_PCI_IDS_H */

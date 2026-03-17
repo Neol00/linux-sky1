@@ -1016,8 +1016,14 @@ static bool acpi_wakeup_gpe_init(struct acpi_device *device)
 	if (match && wakeup->sleep_state == ACPI_STATE_S5)
 		wakeup->sleep_state = ACPI_STATE_S4;
 
-	status = acpi_setup_gpe_for_wake(device->handle, wakeup->gpe_device,
-					 wakeup->gpe_number);
+	if (!acpi_gbl_reduced_hardware) {
+		status = acpi_setup_gpe_for_wake(device->handle, wakeup->gpe_device,
+					 	wakeup->gpe_number);
+	} else {
+		device_set_wakeup_capable(&device->dev, true);
+		status = AE_OK;
+	}
+
 	return ACPI_SUCCESS(status);
 }
 

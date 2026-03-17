@@ -1484,6 +1484,8 @@ struct rt5682s_priv {
 	unsigned int irq;
 	int irq_work_delay_time;
 	int wclk_enabled;
+
+	struct gpio_desc *ldo1_gpiod;
 };
 
 int rt5682s_sel_asrc_clk_src(struct snd_soc_component *component,

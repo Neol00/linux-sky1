@@ -486,6 +486,12 @@ static int arch_build_bp_info(struct perf_event *bp,
 
 	/* Address */
 	hw->address = attr->bp_addr;
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+	if (attr->bp_attr.mask) {
+		hw->address = attr->bp_attr.start_addr;
+		hw->ctrl.mask = attr->bp_attr.mask;
+	}
+#endif
 
 	/*
 	 * Privilege
@@ -579,7 +585,11 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
  * exception level at the register level.
  * This is used when single-stepping after a breakpoint exception.
  */
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+void toggle_bp_registers(int reg, enum dbg_active_el el, int enable)
+#else
 static void toggle_bp_registers(int reg, enum dbg_active_el el, int enable)
+#endif
 {
 	int i, max_slots, privilege;
 	u32 ctrl;
@@ -652,6 +662,9 @@ void do_breakpoint(unsigned long esr, struct pt_regs *regs)
 			goto unlock;
 
 		counter_arch_bp(bp)->trigger = addr;
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+		bp->attr.bp_attr.access_type = HW_BREAKPOINT_X;
+#endif
 		perf_bp_event(bp, regs);
 
 		/* Do we need to handle the stepping? */
@@ -795,12 +808,19 @@ void do_watchpoint(unsigned long addr, unsigned long esr, struct pt_regs *regs)
 		if (dist != 0)
 			continue;
 
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+		wp->attr.bp_attr.access_type = access;
+#endif
 		step = watchpoint_report(wp, addr, regs);
 	}
 
 	/* No exact match found? */
-	if (min_dist > 0 && min_dist != -1)
+	if (min_dist > 0 && min_dist != -1) {
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+		slots[closest_match]->attr.bp_attr.access_type = access;
+#endif
 		step = watchpoint_report(slots[closest_match], addr, regs);
+	}
 
 	rcu_read_unlock();
 

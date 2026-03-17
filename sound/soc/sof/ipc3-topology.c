@@ -1384,6 +1384,86 @@ static int sof_link_afe_load(struct snd_soc_component *scomp, struct snd_sof_dai
 	return 0;
 }
 
+static int sof_link_i2s_sc_load(struct snd_soc_component *scomp, struct snd_sof_dai_link *slink,
+				struct sof_ipc_dai_config *config, struct snd_sof_dai *dai)
+{
+	struct snd_soc_tplg_hw_config *hw_config = slink->hw_configs;
+	struct sof_dai_private_data *private = dai->private;
+	u32 size = sizeof(*config);
+	int ret;
+
+	/* handle master/slave and inverted clocks */
+	sof_dai_set_format(hw_config, config);
+
+	/* init IPC */
+	memset(&config->i2s_sc, 0, sizeof(config->i2s_sc));
+	config->hdr.size = size;
+
+	/* parse one set of I2S_SC tokens */
+	ret = sof_update_ipc_object(scomp, &config->i2s_sc, SOF_I2S_SC_TOKENS, slink->tuples,
+				    slink->num_tuples, size, 4);
+	if (ret < 0)
+		return ret;
+
+	config->i2s_sc.tdm_slots = le32_to_cpu(hw_config->tdm_slots);
+	config->i2s_sc.tdm_slot_width = le32_to_cpu(hw_config->tdm_slot_width);
+	config->i2s_sc.tdm_rx_slot_mask = le32_to_cpu(hw_config->rx_slots);
+	config->i2s_sc.tdm_tx_slot_mask = le32_to_cpu(hw_config->tx_slots);
+
+	dev_info(scomp->dev,
+		 "tplg: config I2S_SC%d, fmt 0x%x, rate %d, channels %d, format %d, mclk_id %d mclk_fs %d, playback_dma_ch %d capture_dma_ch %d, slots %d slot_width %d\n",
+		config->dai_index, config->format,
+		config->i2s_sc.rate, config->i2s_sc.channels, config->i2s_sc.format,
+		config->i2s_sc.mclk_id, config->i2s_sc.mclk_fs,
+		config->i2s_sc.playback_dma_ch, config->i2s_sc.capture_dma_ch,
+		config->i2s_sc.tdm_slots, config->i2s_sc.tdm_slot_width);
+
+	dai->number_configs = 1;
+	dai->current_config = 0;
+	private->dai_config = kmemdup(config, size, GFP_KERNEL);
+	if (!private->dai_config)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int sof_link_i2s_mc_load(struct snd_soc_component *scomp, struct snd_sof_dai_link *slink,
+				struct sof_ipc_dai_config *config, struct snd_sof_dai *dai)
+{
+	struct snd_soc_tplg_hw_config *hw_config = slink->hw_configs;
+	struct sof_dai_private_data *private = dai->private;
+	u32 size = sizeof(*config);
+	int ret;
+
+	/* handle master/slave and inverted clocks */
+	sof_dai_set_format(hw_config, config);
+
+	/* init IPC */
+	memset(&config->i2s_mc, 0, sizeof(config->i2s_mc));
+	config->hdr.size = size;
+
+	/* parse one set of I2S_MC tokens */
+	ret = sof_update_ipc_object(scomp, &config->i2s_mc, SOF_I2S_MC_TOKENS, slink->tuples,
+				    slink->num_tuples, size, 6);
+	if (ret < 0)
+		return ret;
+
+	dev_info(scomp->dev,
+		 "tplg: config I2S_MC%d, fmt 0x%x, rate %d, channels %d, format %d, mclk_id %d mclk_fs %d, playback_dma_ch %d capture_dma_ch %d, pin_rx_mask 0x%x pin_tx_mask 0x%x\n",
+		config->dai_index, config->format,
+		config->i2s_mc.rate, config->i2s_mc.channels, config->i2s_mc.format,
+		config->i2s_mc.mclk_id, config->i2s_mc.mclk_fs,
+		config->i2s_mc.playback_dma_ch, config->i2s_mc.capture_dma_ch,
+		config->i2s_mc.pin_rx_mask, config->i2s_mc.pin_tx_mask);
+
+	dai->number_configs = 1;
+	dai->current_config = 0;
+	private->dai_config = kmemdup(config, size, GFP_KERNEL);
+	if (!private->dai_config)
+		return -ENOMEM;
+	return 0;
+}
+
 static int sof_link_ssp_load(struct snd_soc_component *scomp, struct snd_sof_dai_link *slink,
 			     struct sof_ipc_dai_config *config, struct snd_sof_dai *dai)
 {

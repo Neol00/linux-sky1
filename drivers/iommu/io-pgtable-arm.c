@@ -1265,3 +1265,89 @@ struct io_pgtable_init_fns io_pgtable_arm_mali_lpae_init_fns = {
 	.alloc	= arm_mali_lpae_alloc_pgtable,
 	.free	= arm_lpae_free_pgtable,
 };
+
+#ifdef CONFIG_ARM_SMMU_V3_WALK
+static inline size_t __lpae_page_len(arm_lpae_iopte pte, int lvl)
+{
+	if (iopte_type(pte) != ARM_LPAE_PTE_TYPE_PAGE
+		&&iopte_type(pte) != ARM_LPAE_PTE_TYPE_BLOCK)
+		return 0;
+
+	switch(lvl)
+	{
+	case (ARM_LPAE_MAX_LEVELS - 1):
+		return SZ_4K;
+	case (ARM_LPAE_MAX_LEVELS - 2):
+		return SZ_2M;
+	case (ARM_LPAE_MAX_LEVELS - 3):
+		return SZ_1G;
+	default:
+		return 0;
+	}
+}
+
+static void __lpae_io_pgt_walk(arm_lpae_iopte *ptep, int lvl, u64 va,
+		     struct arm_lpae_io_pgtable *data,
+		     io_pgt_map_cb callback, void *param)
+{
+	struct pgt_io_map map;
+	arm_lpae_iopte pte, *ptep_next;
+	u64 i, tmp_va = 0;
+	int entry_num;
+
+	entry_num = 1 << (data->bits_per_level + ARM_LPAE_PGD_IDX(lvl, data));
+
+	for (i = 0; i < entry_num; i++) {
+		pte = READ_ONCE(*(ptep + i));
+		if (!pte)
+			continue;
+
+		tmp_va = va | (i << ARM_LPAE_LVL_SHIFT(lvl, data));
+
+		if (iopte_leaf(pte, lvl, data->iop.fmt)) {
+			//TODO: print prot
+			if (!callback)
+				continue;
+			map.iova = tmp_va;
+			map.pa = iopte_to_paddr(pte, data);
+			map.len = __lpae_page_len(pte, lvl);
+			callback(&map, param);
+			continue;
+		}
+
+		ptep_next = iopte_deref(pte, data);
+		__lpae_io_pgt_walk(ptep_next, lvl + 1, tmp_va, data,
+					callback, param);
+	}
+}
+
+int lpae_io_pgt_walk(void *pgd, struct io_pgtable_ops *ops,
+			int stage, io_pgt_map_cb callback, void *param)
+{
+	struct arm_lpae_io_pgtable *data, data_sva;
+	int levels, va_bits, bits_per_level;
+
+	if (!pgd || !ops)
+		return -EINVAL;
+
+	if (stage == 1) { //TODO: add pcie pasid support
+		data = io_pgtable_ops_to_data(ops);
+	} else {
+		va_bits = VA_BITS - PAGE_SHIFT;
+		bits_per_level = PAGE_SHIFT - ilog2(sizeof(arm_lpae_iopte));
+		levels = DIV_ROUND_UP(va_bits, bits_per_level);
+
+		data_sva.start_level = ARM_LPAE_MAX_LEVELS - levels;
+		data_sva.pgd_bits = va_bits - (bits_per_level * (levels - 1));
+		data_sva.bits_per_level = bits_per_level;
+		data_sva.pgd = pgd;
+
+		data = &data_sva;
+	}
+
+	__lpae_io_pgt_walk(pgd, data->start_level, 0, data, callback, param);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(lpae_io_pgt_walk);
+#endif

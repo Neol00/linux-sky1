@@ -875,11 +875,13 @@ static int __acpi_device_wakeup_enable(struct acpi_device *adev,
 	if (wakeup->enable_count > 0)
 		goto inc;
 
-	status = acpi_enable_gpe(wakeup->gpe_device, wakeup->gpe_number);
-	if (ACPI_FAILURE(status)) {
-		acpi_disable_wakeup_device_power(adev);
-		error = -EIO;
-		goto out;
+	if (!acpi_gbl_reduced_hardware) {
+		status = acpi_enable_gpe(wakeup->gpe_device, wakeup->gpe_number);
+		if (ACPI_FAILURE(status)) {
+			acpi_disable_wakeup_device_power(adev);
+			error = -EIO;
+			goto out;
+		}
 	}
 
 	acpi_handle_debug(adev->handle, "GPE%2X enabled for wakeup\n",

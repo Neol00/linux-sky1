@@ -108,7 +108,7 @@ static void __init fdt_init_reserved_mem_node(struct reserved_mem *rmem);
 /*
  * fdt_reserved_mem_save_node() - save fdt node for second pass initialization
  */
-static void __init fdt_reserved_mem_save_node(unsigned long node, const char *uname,
+void __init fdt_reserved_mem_save_node(unsigned long node, const char *uname,
 					      phys_addr_t base, phys_addr_t size)
 {
 	struct reserved_mem *rmem = &reserved_mem[reserved_mem_count];

@@ -3281,7 +3281,7 @@ struct vm_struct *get_vm_area_caller(unsigned long size, unsigned long flags,
 				const void *caller)
 {
 	return __get_vm_area_node(size, 1, PAGE_SHIFT, flags,
-				  VMALLOC_START, VMALLOC_END,
+				  VMALLOC_START + SZ_2G, VMALLOC_END,
 				  NUMA_NO_NODE, GFP_KERNEL, caller);
 }
 

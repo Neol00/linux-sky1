@@ -291,6 +291,7 @@ snd-soc-sdw-mockup-y := sdw-mockup.o
 snd-soc-sgtl5000-y := sgtl5000.o
 snd-soc-alc5623-y := alc5623.o
 snd-soc-alc5632-y := alc5632.o
+snd-soc-sn6040-y := sn6040.o
 snd-soc-sigmadsp-y := sigmadsp.o
 snd-soc-sigmadsp-i2c-y := sigmadsp-i2c.o
 snd-soc-sigmadsp-regmap-y := sigmadsp-regmap.o
@@ -433,6 +434,9 @@ snd-soc-tas2764-y := tas2764.o
 snd-soc-tas2780-y := tas2780.o
 # Mux
 snd-soc-simple-mux-y := simple-mux.o
+
+# Dummy codec
+snd-soc-dummy-codec-y := dummy-codec.o
 
 obj-$(CONFIG_SND_SOC_88PM860X)	+= snd-soc-88pm860x.o
 obj-$(CONFIG_SND_SOC_AB8500_CODEC)	+= snd-soc-ab8500-codec.o
@@ -718,6 +722,7 @@ obj-$(CONFIG_SND_SOC_RT715_SDCA_SDW)     += snd-soc-rt715-sdca.o
 obj-$(CONFIG_SND_SOC_RT721_SDCA_SDW)     += snd-soc-rt721-sdca.o
 obj-$(CONFIG_SND_SOC_RT722_SDCA_SDW)     += snd-soc-rt722-sdca.o
 obj-$(CONFIG_SND_SOC_RT9120)	+= snd-soc-rt9120.o
+obj-$(CONFIG_SND_SOC_SN6040)	+= snd-soc-sn6040.o
 obj-$(CONFIG_SND_SOC_RT9123)	+= snd-soc-rt9123.o
 obj-$(CONFIG_SND_SOC_RT9123P)	+= snd-soc-rt9123p.o
 obj-$(CONFIG_SND_SOC_RTQ9124)	+= snd-soc-rtq9124.o
@@ -881,3 +886,5 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
 
 # Mux
 obj-$(CONFIG_SND_SOC_SIMPLE_MUX)	+= snd-soc-simple-mux.o
+
+obj-$(CONFIG_SND_SOC_DUMMY_CODEC) += snd-soc-dummy-codec.o

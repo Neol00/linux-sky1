@@ -71,10 +71,10 @@ static int prepare_tx(struct cros_ec_device *ec_dev,
 	request = (struct ec_host_request *)out;
 	request->struct_version = EC_HOST_REQUEST_VERSION;
 	request->checksum = 0;
-	request->command = msg->command;
+	request->command = ec_cpu_to_be16(msg->command);
 	request->command_version = msg->version;
 	request->reserved = 0;
-	request->data_len = msg->outsize;
+	request->data_len = ec_cpu_to_be16(msg->outsize);
 
 	for (i = 0; i < sizeof(*request); i++)
 		csum += out[i];
@@ -373,7 +373,7 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 		goto exit;
 	}
 
-	mapped = cros_ec_map_error(msg->result);
+	mapped = cros_ec_map_error(ec_be32_to_cpu(msg->result));
 	if (mapped) {
 		ret = mapped;
 		goto exit;
@@ -388,19 +388,19 @@ static int cros_ec_get_proto_info(struct cros_ec_device *ec_dev, int devidx)
 
 	switch (devidx) {
 	case CROS_EC_DEV_EC_INDEX:
-		ec_dev->max_request = info->max_request_packet_size -
+		ec_dev->max_request = ec_be16_to_cpu(info->max_request_packet_size) -
 						sizeof(struct ec_host_request);
-		ec_dev->max_response = info->max_response_packet_size -
+		ec_dev->max_response = ec_be16_to_cpu(info->max_response_packet_size) -
 						sizeof(struct ec_host_response);
 		ec_dev->proto_version = min(EC_HOST_REQUEST_VERSION,
-					    fls(info->protocol_versions) - 1);
-		ec_dev->din_size = info->max_response_packet_size + EC_MAX_RESPONSE_OVERHEAD;
-		ec_dev->dout_size = info->max_request_packet_size + EC_MAX_REQUEST_OVERHEAD;
+					    fls(ec_be32_to_cpu(info->protocol_versions)) - 1);
+		ec_dev->din_size = ec_be16_to_cpu(info->max_response_packet_size) + EC_MAX_RESPONSE_OVERHEAD;
+		ec_dev->dout_size = ec_be16_to_cpu(info->max_request_packet_size) + EC_MAX_REQUEST_OVERHEAD;
 
 		dev_dbg(ec_dev->dev, "using proto v%u\n", ec_dev->proto_version);
 		break;
 	case CROS_EC_DEV_PD_INDEX:
-		ec_dev->max_passthru = info->max_request_packet_size -
+		ec_dev->max_passthru = ec_be16_to_cpu(info->max_request_packet_size) -
 						sizeof(struct ec_host_request);
 
 		dev_dbg(ec_dev->dev, "found PD chip\n");
@@ -939,9 +939,9 @@ u32 cros_ec_get_host_event(struct cros_ec_device *ec_dev)
 		dev_warn(ec_dev->dev, "Invalid host event size\n");
 		return 0;
 	}
-
+#ifndef CONFIG_CIX_EC
 	host_event = get_unaligned_le32(&ec_dev->event_data.data.host_event);
-
+#endif
 	return host_event;
 }
 EXPORT_SYMBOL(cros_ec_get_host_event);

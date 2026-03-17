@@ -5,6 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/mm.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_runtime.h>
@@ -54,13 +55,13 @@ static int panthor_gpu_coherency_init(struct panthor_device *ptdev)
 
 static int panthor_clk_init(struct panthor_device *ptdev)
 {
-	ptdev->clks.core = devm_clk_get(ptdev->base.dev, NULL);
+	ptdev->clks.core = devm_clk_get(ptdev->base.dev, "gpu_clk_core");
 	if (IS_ERR(ptdev->clks.core))
 		return dev_err_probe(ptdev->base.dev,
 				     PTR_ERR(ptdev->clks.core),
 				     "get 'core' clock failed");
 
-	ptdev->clks.stacks = devm_clk_get_optional(ptdev->base.dev, "stacks");
+	ptdev->clks.stacks = devm_clk_get(ptdev->base.dev, "gpu_clk_stacks");
 	if (IS_ERR(ptdev->clks.stacks))
 		return dev_err_probe(ptdev->base.dev,
 				     PTR_ERR(ptdev->clks.stacks),
@@ -72,18 +73,129 @@ static int panthor_clk_init(struct panthor_device *ptdev)
 				     PTR_ERR(ptdev->clks.coregroup),
 				     "get 'coregroup' clock failed");
 
+	/* CIX SKY1 needs additional backup clocks */
+	ptdev->clks.backup[0] = devm_clk_get_optional(ptdev->base.dev, "gpu_clk_200M");
+	if (IS_ERR(ptdev->clks.backup[0]))
+		return dev_err_probe(ptdev->base.dev,
+				     PTR_ERR(ptdev->clks.backup[0]),
+				     "get 'gpu_clk_200M' clock failed");
+
+	ptdev->clks.backup[1] = devm_clk_get_optional(ptdev->base.dev, "gpu_clk_400M");
+	if (IS_ERR(ptdev->clks.backup[1]))
+		return dev_err_probe(ptdev->base.dev,
+				     PTR_ERR(ptdev->clks.backup[1]),
+				     "get 'gpu_clk_400M' clock failed");
+
 	drm_info(&ptdev->base, "clock rate = %lu\n", clk_get_rate(ptdev->clks.core));
 	return 0;
 }
 
-static int panthor_init_power(struct device *dev)
+static void panthor_pm_domain_fini(struct panthor_device *ptdev)
 {
-	struct dev_pm_domain_list  *pd_list = NULL;
+	int i;
 
-	if (dev->pm_domain)
-		return 0;
+	for (i = 0; i < ARRAY_SIZE(ptdev->pm_domain_devs); i++) {
+		if (!ptdev->pm_domain_devs[i])
+			continue;
 
-	return devm_pm_domain_attach_list(dev, NULL, &pd_list);
+		if (ptdev->pm_domain_links[i])
+			device_link_del(ptdev->pm_domain_links[i]);
+
+		dev_pm_domain_detach(ptdev->pm_domain_devs[i], true);
+		ptdev->pm_domain_devs[i] = NULL;
+		ptdev->pm_domain_links[i] = NULL;
+	}
+}
+
+static int panthor_pm_domain_init(struct panthor_device *ptdev)
+{
+	int err;
+	int i, num_domains;
+
+	if (!has_acpi_companion(ptdev->base.dev)) {
+		num_domains = of_count_phandle_with_args(ptdev->base.dev->of_node,
+							 "power-domains",
+							 "#power-domain-cells");
+
+		/*
+		 * Single domain is handled by the core, and, if only a single power
+		 * the power domain is requested, the property is optional.
+		 */
+		if (num_domains < 2)
+			return 0;
+
+		if (WARN(num_domains > ARRAY_SIZE(ptdev->pm_domain_devs),
+			 "Too many supplies in compatible structure.\n"))
+			return -EINVAL;
+
+		for (i = 0; i < num_domains; i++) {
+			ptdev->pm_domain_devs[i] =
+				dev_pm_domain_attach_by_id(ptdev->base.dev, i);
+			if (IS_ERR_OR_NULL(ptdev->pm_domain_devs[i])) {
+				err = PTR_ERR(ptdev->pm_domain_devs[i]) ? : -ENODATA;
+				ptdev->pm_domain_devs[i] = NULL;
+				dev_err(ptdev->base.dev,
+					"failed to get pm-domain %d: %d\n",
+					i, err);
+				goto err;
+			}
+
+			ptdev->pm_domain_links[i] = device_link_add(ptdev->base.dev,
+					ptdev->pm_domain_devs[i], DL_FLAG_PM_RUNTIME |
+					DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
+			if (!ptdev->pm_domain_links[i]) {
+				dev_err(ptdev->pm_domain_devs[i],
+					"adding device link failed!\n");
+				err = -ENODEV;
+				goto err;
+			}
+		}
+	} else {
+		ptdev->pm_domain_devs[1] = dev_pm_domain_attach_by_name(ptdev->base.dev, "perf");
+		if (IS_ERR_OR_NULL(ptdev->pm_domain_devs[1])) {
+			err = PTR_ERR(ptdev->pm_domain_devs[1]) ? : -ENODATA;
+			ptdev->pm_domain_devs[1] = NULL;
+			dev_err(ptdev->base.dev,
+				"failed to get acpi perf domain %d\n", err);
+			goto err;
+		}
+
+		ptdev->pm_domain_links[1] = device_link_add(ptdev->base.dev,
+				ptdev->pm_domain_devs[1], DL_FLAG_PM_RUNTIME |
+				DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
+		if (!ptdev->pm_domain_links[1]) {
+			dev_err(ptdev->base.dev, "Failed to add device_link to gpu perf domain.\n");
+			err = -ENODEV;
+			goto err;
+		}
+
+		struct fwnode_handle *fwnode = fwnode_find_reference(ptdev->base.dev->fwnode,
+								     "power-supply", 0);
+		if (IS_ERR_OR_NULL(fwnode)) {
+			dev_warn(ptdev->base.dev,
+				 "Failed to get power-supply property, using single power domain.\n");
+			return 0;
+		}
+		ptdev->pm_domain_devs[0] = bus_find_device_by_fwnode(&platform_bus_type, fwnode);
+		pm_runtime_enable(ptdev->pm_domain_devs[0]);
+		dev_pm_domain_attach(ptdev->pm_domain_devs[0], true);
+		fwnode_handle_put(fwnode);
+
+		ptdev->pm_domain_links[0] = device_link_add(ptdev->base.dev,
+				ptdev->pm_domain_devs[0], DL_FLAG_PM_RUNTIME |
+				DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
+		if (!ptdev->pm_domain_links[0]) {
+			dev_err(ptdev->base.dev, "Failed to add device_link to gpu power domain.\n");
+			err = -ENODEV;
+			goto err;
+		}
+	}
+
+	return 0;
+
+err:
+	panthor_pm_domain_fini(ptdev);
+	return err;
 }
 
 void panthor_device_unplug(struct panthor_device *ptdev)
@@ -131,6 +243,8 @@ void panthor_device_unplug(struct panthor_device *ptdev)
 	/* If PM is disabled, we need to call the suspend handler manually. */
 	if (!IS_ENABLED(CONFIG_PM))
 		panthor_device_suspend(ptdev->base.dev);
+
+	panthor_pm_domain_fini(ptdev);
 
 	/* Report the unplug operation as done to unblock concurrent
 	 * panthor_device_unplug() callers.
@@ -243,7 +357,7 @@ int panthor_device_init(struct panthor_device *ptdev)
 	if (ret)
 		return ret;
 
-	ret = panthor_init_power(ptdev->base.dev);
+	ret = panthor_pm_domain_init(ptdev);
 	if (ret < 0) {
 		drm_err(&ptdev->base, "init power domains failed, ret=%d", ret);
 		return ret;
@@ -334,6 +448,7 @@ err_unplug_pwr:
 
 err_rpm_put:
 	pm_runtime_put_sync_suspend(ptdev->base.dev);
+	panthor_pm_domain_fini(ptdev);
 	return ret;
 }
 
@@ -502,7 +617,7 @@ static int panthor_device_resume_hw_components(struct panthor_device *ptdev)
 int panthor_device_resume(struct device *dev)
 {
 	struct panthor_device *ptdev = dev_get_drvdata(dev);
-	int ret, cookie;
+	int ret, cookie, i;
 
 	if (atomic_read(&ptdev->pm.state) != PANTHOR_DEVICE_PM_STATE_SUSPENDED)
 		return -EINVAL;
@@ -520,6 +635,16 @@ int panthor_device_resume(struct device *dev)
 	ret = clk_prepare_enable(ptdev->clks.coregroup);
 	if (ret)
 		goto err_disable_stacks_clk;
+
+	for (i = 0; i < ARRAY_SIZE(ptdev->clks.backup); i++) {
+		ret = clk_prepare_enable(ptdev->clks.backup[i]);
+		if (ret)
+			goto err_disable_backup_clks;
+	}
+
+	/* CIX SKY1 have custom devfreq, let's force max for now (XXX: devfreq) */
+	if (ptdev->pm_domain_devs[1])
+		dev_pm_genpd_set_performance_state(ptdev->pm_domain_devs[1], 1000);
 
 	panthor_devfreq_resume(ptdev);
 
@@ -563,6 +688,10 @@ int panthor_device_resume(struct device *dev)
 
 err_suspend_devfreq:
 	panthor_devfreq_suspend(ptdev);
+
+err_disable_backup_clks:
+	for (i = 0; i < ARRAY_SIZE(ptdev->clks.backup); i++)
+		clk_disable_unprepare(ptdev->clks.backup[i]);
 	clk_disable_unprepare(ptdev->clks.coregroup);
 
 err_disable_stacks_clk:
@@ -580,7 +709,7 @@ err_set_suspended:
 int panthor_device_suspend(struct device *dev)
 {
 	struct panthor_device *ptdev = dev_get_drvdata(dev);
-	int cookie;
+	int cookie, i;
 
 	if (atomic_read(&ptdev->pm.state) != PANTHOR_DEVICE_PM_STATE_ACTIVE)
 		return -EINVAL;
@@ -615,6 +744,8 @@ int panthor_device_suspend(struct device *dev)
 
 	panthor_devfreq_suspend(ptdev);
 
+	for (i = 0; i < ARRAY_SIZE(ptdev->clks.backup); i++)
+		clk_disable_unprepare(ptdev->clks.backup[i]);
 	clk_disable_unprepare(ptdev->clks.coregroup);
 	clk_disable_unprepare(ptdev->clks.stacks);
 	clk_disable_unprepare(ptdev->clks.core);

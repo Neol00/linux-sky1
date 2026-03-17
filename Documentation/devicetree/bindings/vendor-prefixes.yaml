@@ -1915,6 +1915,10 @@ patternProperties:
     description: ZTE Corp.
   "^zyxel,.*":
     description: ZyXEL Communications Corp.
+  "^ipbloq,.*":
+    description: IPbloq, Lda
+  "^cix,.*":
+    description: Copyright 2024 Cix Technology Group Co., Ltd.Co., Ltd
 
   # Normal property name match without a comma
   # These should catch all node/property names without a prefix

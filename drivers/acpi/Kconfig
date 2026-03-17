@@ -246,6 +246,13 @@ config ACPI_FAN
 	  To compile this driver as a module, choose M here:
 	  the module will be called fan.
 
+config CIX_ACPI_POWER_DOMAIN
+	bool "CIX Power Domain Management API for acpi"
+	depends on ARCH_CIX
+	help
+	  This enables the power domain API for CIX Technologies,Inc.
+	  Say Y if you want to supprot ACPI power domain.
+
 config ACPI_TAD
 	tristate "ACPI Time and Alarm (TAD) Device Support"
 	depends on SYSFS && PM_SLEEP

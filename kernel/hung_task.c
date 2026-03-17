@@ -28,6 +28,10 @@
 
 #include <trace/events/sched.h>
 
+#ifdef CONFIG_DFX_HUNGTASK
+#include <dfx/hungtask_base.h>
+#endif
+
 /*
  * The number of tasks checked:
  */
@@ -373,7 +377,9 @@ static int proc_dohung_task_timeout_secs(const struct ctl_table *table, int writ
 		goto out;
 
 	wake_up_process(watchdog_task);
-
+#ifdef CONFIG_DFX_HUNGTASK
+	htbase_set_timeout_secs(sysctl_hung_task_timeout_secs);
+#endif
  out:
 	return ret;
 }
@@ -501,7 +507,11 @@ static int watchdog(void *dummy)
 	set_user_nice(current, 0);
 
 	for ( ; ; ) {
+#ifdef CONFIG_DFX_HUNGTASK
+		unsigned long timeout = HEARTBEAT_TIME;
+#else
 		unsigned long timeout = sysctl_hung_task_timeout_secs;
+#endif
 		unsigned long interval = sysctl_hung_task_check_interval_secs;
 		long t;
 
@@ -509,10 +519,15 @@ static int watchdog(void *dummy)
 			interval = timeout;
 		interval = min_t(unsigned long, interval, timeout);
 		t = hung_timeout_jiffies(hung_last_checked, interval);
+
 		if (t <= 0) {
 			if (!atomic_xchg(&reset_hung_task, 0) &&
 			    !hung_detector_suspended)
+#ifdef CONFIG_DFX_HUNGTASK
+				htbase_check_tasks(timeout);
+#else
 				check_hung_uninterruptible_tasks(timeout);
+#endif
 			hung_last_checked = jiffies;
 			continue;
 		}
@@ -524,6 +539,13 @@ static int watchdog(void *dummy)
 
 static int __init hung_task_init(void)
 {
+#ifdef CONFIG_DFX_HUNGTASK
+	int ret = 0;
+
+	ret = htbase_create_sysfs();
+	if (ret)
+		pr_err("hungtask: create_sysfs_hungtask fail.\n");
+#endif
 	atomic_notifier_chain_register(&panic_notifier_list, &panic_block);
 
 	/* Disable hung task detector on suspend */

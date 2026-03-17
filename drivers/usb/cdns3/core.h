@@ -13,6 +13,7 @@
 
 #include <linux/usb/otg.h>
 #include <linux/usb/role.h>
+#include <linux/workqueue.h>
 
 struct cdns;
 
@@ -22,6 +23,7 @@ struct cdns;
  * @stop: stop this role
  * @suspend: suspend callback for this role
  * @resume: resume callback for this role
+ * @restore: restore callback for hibernation
  * @irq: irq handler for this role
  * @name: role name string (host/gadget)
  * @state: current state
@@ -31,6 +33,7 @@ struct cdns_role_driver {
 	void (*stop)(struct cdns *cdns);
 	int (*suspend)(struct cdns *cdns, bool do_wakeup);
 	int (*resume)(struct cdns *cdns, bool lost_power);
+	int (*restore)(struct cdns *cdns);
 	const char *name;
 #define CDNS_ROLE_STATE_INACTIVE	0
 #define CDNS_ROLE_STATE_ACTIVE		1
@@ -42,6 +45,8 @@ struct cdns_role_driver {
 struct cdns3_platform_data {
 	int (*platform_suspend)(struct device *dev,
 			bool suspend, bool wakeup);
+	int (*platform_reset)(struct device *dev);
+	int (*platform_u3_disable)(struct device *dev);
 	unsigned long quirks;
 #define CDNS3_DEFAULT_PM_RUNTIME_ALLOW	BIT(0)
 #define CDNS3_DRD_SUSPEND_RESIDENCY_ENABLE	BIT(1)
@@ -50,6 +55,7 @@ struct cdns3_platform_data {
 /**
  * struct cdns - Representation of Cadence USB3 DRD controller.
  * @dev: pointer to Cadence device struct
+ * @xhci_device: pointer to base of xhci platform device
  * @xhci_regs: pointer to base of xhci registers
  * @xhci_res: the resource for xhci
  * @dev_regs: pointer to base of dev registers
@@ -64,11 +70,16 @@ struct cdns3_platform_data {
  * @wakeup_irq: irq number for wakeup event, it is optional
  * @roles: array of supported roles for this controller
  * @role: current role
+ * @role: the new role will swtich to
  * @host_dev: the child host device pointer for cdns core
  * @gadget_dev: the child gadget device pointer
  * @usb2_phy: pointer to USB2 PHY
  * @usb3_phy: pointer to USB3 PHY
  * @mutex: the mutex for concurrent code at driver
+ * @role_mutex: the mutex for role switch context
+ * @plat_reset_mutex: the mutex for platform reset
+ * @plat_reset_complete: platform reset complete or not
+ * @u3_disable: disable u3 port
  * @dr_mode: supported mode of operation it can be only Host, only Device
  *           or OTG mode that allow to switch between Device and Host mode.
  *           This field based on firmware setting, kernel configuration
@@ -82,9 +93,12 @@ struct cdns3_platform_data {
  * @override_apb_timeout: hold value of APB timeout. For value 0 the default
  *                        value in CHICKEN_BITS_3 will be preserved.
  * @gadget_init: pointer to gadget initialization function
+ * @died: low level hardware died
+ * @vbus_override: SW vbus input override, only for cdnsp
  */
 struct cdns {
 	struct device			*dev;
+	struct platform_device		*xhci_device;
 	void __iomem			*xhci_regs;
 	struct resource			xhci_res[CDNS_XHCI_RESOURCES_NUM];
 	struct cdns3_usb_regs __iomem	*dev_regs;
@@ -106,12 +120,17 @@ struct cdns {
 	int				wakeup_irq;
 	struct cdns_role_driver	*roles[USB_ROLE_DEVICE + 1];
 	enum usb_role			role;
+	enum usb_role			new_role;
 	struct platform_device		*host_dev;
 	void				*gadget_dev;
 	struct phy			*usb2_phy;
 	struct phy			*usb3_phy;
 	/* mutext used in workqueue*/
 	struct mutex			mutex;
+	struct mutex			role_mutex;
+	struct mutex			plat_reset_mutex;
+	bool				plat_reset_complete;
+	bool				u3_disable;
 	enum usb_dr_mode		dr_mode;
 	struct usb_role_switch		*role_sw;
 	bool				in_lpm;
@@ -120,9 +139,15 @@ struct cdns {
 	spinlock_t			lock;
 	struct xhci_plat_priv		*xhci_plat_data;
 	u32                             override_apb_timeout;
+	struct work_struct	drd_work;
+	bool d3;
 
 	int (*gadget_init)(struct cdns *cdns);
+	bool died;
+	bool vbus_override;
 };
+
+#define work_to_cdns(w)		(container_of((w), struct cdns, drd_work))
 
 int cdns_hw_role_switch(struct cdns *cdns);
 int cdns_init(struct cdns *cdns);

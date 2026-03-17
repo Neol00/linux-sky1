@@ -177,6 +177,11 @@ static const struct inv_icm42600_hw inv_icm42600_hw[INV_CHIP_NB] = {
 		.name = "icm42631",
 		.conf = &inv_icm42600_default_conf,
 	},
+	[INV_CHIP_ICM42670] = {
+		.whoami = INV_ICM42600_WHOAMI_ICM42670,
+		.name = "icm42670",
+		.conf = &inv_icm42600_default_conf,
+	}
 };
 
 const struct iio_mount_matrix *
@@ -337,9 +342,8 @@ int inv_icm42600_set_accel_conf(struct inv_icm42600_state *st,
 
 	/* set GYRO_ACCEL_CONFIG0 register (accel filter) */
 	if (conf->filter != oldconf->filter) {
-		val = INV_ICM42600_GYRO_ACCEL_CONFIG0_ACCEL_FILT(conf->filter) |
-		      INV_ICM42600_GYRO_ACCEL_CONFIG0_GYRO_FILT(st->conf.gyro.filter);
-		ret = regmap_write(st->map, INV_ICM42600_REG_GYRO_ACCEL_CONFIG0, val);
+		val = INV_ICM42600_GYRO_ACCEL_CONFIG0_ACCEL_FILT(conf->filter);
+		ret = regmap_write(st->map, INV_ICM42600_REG_ACCEL_CONFIG1, val);
 		if (ret)
 			return ret;
 		oldconf->filter = conf->filter;
@@ -381,9 +385,8 @@ int inv_icm42600_set_gyro_conf(struct inv_icm42600_state *st,
 
 	/* set GYRO_ACCEL_CONFIG0 register (gyro filter) */
 	if (conf->filter != oldconf->filter) {
-		val = INV_ICM42600_GYRO_ACCEL_CONFIG0_ACCEL_FILT(st->conf.accel.filter) |
-		      INV_ICM42600_GYRO_ACCEL_CONFIG0_GYRO_FILT(conf->filter);
-		ret = regmap_write(st->map, INV_ICM42600_REG_GYRO_ACCEL_CONFIG0, val);
+		val = INV_ICM42600_GYRO_ACCEL_CONFIG0_GYRO_FILT(st->conf.accel.filter);
+		ret = regmap_write(st->map, INV_ICM42600_REG_GYRO_CONFIG1, val);
 		if (ret)
 			return ret;
 		oldconf->filter = conf->filter;
@@ -478,9 +481,12 @@ static int inv_icm42600_set_conf(struct inv_icm42600_state *st,
 		return ret;
 
 	/* set GYRO_ACCEL_CONFIG0 register (gyro & accel filters) */
-	val = INV_ICM42600_GYRO_ACCEL_CONFIG0_ACCEL_FILT(conf->accel.filter) |
-	      INV_ICM42600_GYRO_ACCEL_CONFIG0_GYRO_FILT(conf->gyro.filter);
-	ret = regmap_write(st->map, INV_ICM42600_REG_GYRO_ACCEL_CONFIG0, val);
+	val = INV_ICM42600_GYRO_ACCEL_CONFIG0_GYRO_FILT(conf->gyro.filter);
+	ret = regmap_write(st->map, INV_ICM42600_REG_GYRO_CONFIG1, val);
+
+	val = INV_ICM42600_GYRO_ACCEL_CONFIG0_ACCEL_FILT(conf->accel.filter);
+	ret = regmap_write(st->map, INV_ICM42600_REG_ACCEL_CONFIG1, val);
+
 	if (ret)
 		return ret;
 
@@ -505,20 +511,18 @@ static int inv_icm42600_setup(struct inv_icm42600_state *st,
 	unsigned int val;
 	int ret;
 
-	/* check chip self-identification value */
-	ret = regmap_read(st->map, INV_ICM42600_REG_WHOAMI, &val);
-	if (ret)
+	/* set chip bus configuration */
+	ret = bus_setup(st);
+	if (ret) {
+		dev_err(dev, "bus setup error\n");
 		return ret;
-	if (val != hw->whoami) {
-		dev_err(dev, "invalid whoami %#02x expected %#02x (%s)\n",
-			val, hw->whoami, hw->name);
-		return -ENODEV;
 	}
+
 	st->name = hw->name;
 
 	/* reset to make sure previous state are not there */
-	ret = regmap_write(st->map, INV_ICM42600_REG_DEVICE_CONFIG,
-			   INV_ICM42600_DEVICE_CONFIG_SOFT_RESET);
+	ret = regmap_write(st->map, INV_ICM42600_REG_SIGNAL_PATH_RESET,
+			   INV_ICM42600_SIGNAL_PATH_RESET_RESET);
 	if (ret)
 		return ret;
 	msleep(INV_ICM42600_RESET_TIME_MS);
@@ -625,7 +629,7 @@ static int inv_icm42600_irq_init(struct inv_icm42600_state *st, int irq,
 				 int irq_type, bool open_drain)
 {
 	struct device *dev = regmap_get_device(st->map);
-	unsigned int val;
+	unsigned int val, orig_val;
 	int ret;
 
 	/* configure INT1 interrupt: default is active low on edge */

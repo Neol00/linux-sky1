@@ -99,6 +99,12 @@ choice
 	  This option sets which thermal governor shall be loaded at
 	  startup. If in doubt, select 'step_wise'.
 
+config THERMAL_DEFAULT_GOV_ACPI_DP
+	bool "acpi_dp"
+	select THERMAL_GOV_ACPI_DP
+	help
+	  Use the acpi_dp governor as default.
+
 config THERMAL_DEFAULT_GOV_STEP_WISE
 	bool "step_wise"
 	select THERMAL_GOV_STEP_WISE
@@ -140,6 +146,11 @@ config THERMAL_DEFAULT_GOV_BANG_BANG
 	  point hysteresis.
 
 endchoice
+
+config THERMAL_GOV_ACPI_DP
+	bool "ACPI DP thermal governor"
+	help
+	  Enable this to manage platform thermals using acpi_dp governor.
 
 config THERMAL_GOV_FAIR_SHARE
 	bool "Fair-share thermal governor"
@@ -463,6 +474,11 @@ endmenu
 menu "Samsung thermal drivers"
 depends on ARCH_EXYNOS || COMPILE_TEST
 source "drivers/thermal/samsung/Kconfig"
+endmenu
+
+menu "Cix thermal drivers"
+depends on ARCH_CIX || COMPILE_TEST
+source "drivers/thermal/cix/Kconfig"
 endmenu
 
 menu "STMicroelectronics thermal drivers"

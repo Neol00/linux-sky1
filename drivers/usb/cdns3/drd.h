@@ -202,12 +202,18 @@ struct cdns_otg_irq_regs {
 #define OVERRIDE_IDPULLUP_V0		BIT(24)
 /* Vbusvalid/Sesvalid override select. */
 #define OVERRIDE_SESS_VLD_SEL		BIT(10)
+/* Vbusvalid/Sesvalid override set high. */
+#define OVERRIDE_SESS_VLD_SET		BIT(11)
 
 /* PHYRST_CFG - bitmasks */
 #define PHYRST_CFG_PHYRST_A_ENABLE     BIT(0)
 
 #define CDNS3_ID_PERIPHERAL		1
 #define CDNS3_ID_HOST			0
+
+#define XEC_CFG_3XPORT_MODE_VALUE_DIS_U3	0xa0031e03
+#define XEC_CFG_3XPORT_MODE_VALUE_EN_U3		0xa0031e00
+#define XEC_CFG_3XPORT_MODE		0x2040
 
 bool cdns_is_host(struct cdns *cdns);
 bool cdns_is_device(struct cdns *cdns);
@@ -223,4 +229,6 @@ void cdns_drd_gadget_off(struct cdns *cdns);
 int cdns_drd_host_on(struct cdns *cdns);
 void cdns_drd_host_off(struct cdns *cdns);
 bool cdns_power_is_lost(struct cdns *cdns);
+void cdns_otg_disable_irq(struct cdns *cdns);
+void cdns_otg_enable_irq(struct cdns *cdns);
 #endif /* __LINUX_CDNS3_DRD */

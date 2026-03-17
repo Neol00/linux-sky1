@@ -27,6 +27,11 @@ config CPU_FREQ_GOV_COMMON
 	select IRQ_WORK
 	bool
 
+config DVFS_BOARD_CHECK
+	depends on ARCH_CIX
+	bool "config board check for dvfs"
+	default n
+
 config CPU_FREQ_STAT
 	bool "CPU frequency transition statistics"
 	help

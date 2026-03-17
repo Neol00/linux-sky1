@@ -14,6 +14,7 @@
 #include <linux/kconfig.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <uapi/linux/i3c/device.h>
 
 /**
  * enum i3c_error_code - I3C error codes

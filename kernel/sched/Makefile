@@ -40,3 +40,5 @@ obj-y += core.o
 obj-y += fair.o
 obj-y += build_policy.o
 obj-y += build_utility.o
+obj-$(CONFIG_MPAM_POLICY) += mpam_policy.o
+obj-$(CONFIG_CIX_VENDOR_HOOKS) += vendor_hooks.o

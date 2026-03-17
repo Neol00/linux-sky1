@@ -2863,7 +2863,10 @@ int panthor_mmu_init(struct panthor_device *ptdev)
 
 	ptdev->mmu = mmu;
 
-	irq = platform_get_irq_byname(to_platform_device(ptdev->base.dev), "mmu");
+	if (has_acpi_companion(ptdev->base.dev))
+		irq = platform_get_irq(to_platform_device(ptdev->base.dev), 1);
+	else
+		irq = platform_get_irq_byname(to_platform_device(ptdev->base.dev), "mmu");
 	if (irq <= 0)
 		return -ENODEV;
 

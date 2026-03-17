@@ -5,6 +5,7 @@
  * Author: Boris Brezillon <boris.brezillon@bootlin.com>
  */
 
+#include <linux/acpi.h>
 #include <linux/bitops.h>
 #include <linux/clk.h>
 #include <linux/err.h>
@@ -214,6 +215,7 @@
 #define XMIT_SINGLE_STATIC_SUBADDR	2
 #define XMIT_BURST_WITHOUT_SUBADDR	3
 #define CMD0_FIFO_PRIV_XMIT_MODE(m)	((m) << 27)
+#define CMD0_FIFO_PRIV_XMIT_MASK(m)	((m & GENMASK(28, 27)) >> 27)
 #define CMD0_FIFO_SBCA			BIT(26)
 #define CMD0_FIFO_RSBC			BIT(25)
 #define CMD0_FIFO_IS_10B		BIT(24)
@@ -367,6 +369,16 @@
 #define ASF_PROTO_FAULT_MSTDDR_FAIL	BIT(14)
 #define ASF_PROTO_FAULT_M(x)		BIT(x)
 
+#define CDNS_I3C_PM_TIMEOUT_MS 1000
+
+enum i3c_trans_op {
+	I3C_WRITE_DATA = 1,
+	I3C_READ_DATA,
+	I3C_CCC_COMMAND,
+};
+
+#define IS_I3C_READ(n)  ((n == 2) ? I3C_READ_DATA : 0)
+
 struct cdns_i3c_master_caps {
 	u32 cmdfifodepth;
 	u32 cmdrfifodepth;
@@ -397,9 +409,50 @@ struct cdns_i3c_data {
 	u8 thd_delay_ns;
 };
 
+enum i3c_need_save_reg_index {
+
+	MST_IDR_INDEX = 0,
+	SLV_IDR_INDEX,
+	CMD_IBI_THR_CTRL_INDEX,
+	MST_IER_INDEX,
+	DEVS_CTRL_INDEX,
+	TX_RX_THR_CTRL_INDEX,
+	PRESCL_CTRL0_INDEX,
+	PRESCL_CTRL1_INDEX,
+	DEV_ID0_RR0_INDEX,
+	DEV_ID0_RR1_INDEX,
+	DEV_ID0_RR2_INDEX,
+	DEV_ID1_RR0_INDEX,
+	DEV_ID1_RR1_INDEX,
+	DEV_ID1_RR2_INDEX,
+	DEV_ID2_RR0_INDEX,
+	DEV_ID2_RR1_INDEX,
+	DEV_ID2_RR2_INDEX,
+	DEV_ID3_RR0_INDEX,
+	DEV_ID3_RR1_INDEX,
+	DEV_ID3_RR2_INDEX,
+	DEV_ID4_RR0_INDEX,
+	DEV_ID4_RR1_INDEX,
+	DEV_ID4_RR2_INDEX,
+	DEV_ID5_RR0_INDEX,
+	DEV_ID5_RR1_INDEX,
+	DEV_ID5_RR2_INDEX,
+	DEV_ID6_RR0_INDEX,
+	DEV_ID6_RR1_INDEX,
+	DEV_ID6_RR2_INDEX,
+	CTRL_INDEX,
+	SAVE_MAX_REG_SIZE,
+};
+
+typedef struct cdns_i3c_store_reg {
+	u32 reg;
+	u32 value;
+}I3C_STORE_REG;
+
 struct cdns_i3c_master {
 	struct work_struct hj_work;
 	struct i3c_master_controller base;
+	struct device *dev;
 	u32 free_rr_slots;
 	unsigned int maxdevs;
 	struct {
@@ -417,6 +470,8 @@ struct cdns_i3c_master {
 	struct cdns_i3c_master_caps caps;
 	unsigned long i3c_scl_lim;
 	const struct cdns_i3c_data *devdata;
+	struct reset_control *i3c_reset;
+	I3C_STORE_REG need_save_reg[SAVE_MAX_REG_SIZE];
 };
 
 static inline struct cdns_i3c_master *
@@ -514,10 +569,24 @@ static void cdns_i3c_master_free_xfer(struct cdns_i3c_xfer *xfer)
 	kfree(xfer);
 }
 
+static enum i3c_trans_op data_write_or_read(u32 ncmds, u32 cmd0)
+{
+	bool is_data = false;
+
+	is_data = (cmd0 & CMD0_FIFO_IS_CCC) ? false : true;
+	if ((is_data == true) && (ncmds == 1))
+		return I3C_WRITE_DATA;
+	else if ((is_data == true) && (ncmds == 2))
+		return I3C_READ_DATA;
+	else
+		return I3C_CCC_COMMAND;
+}
+
 static void cdns_i3c_master_start_xfer_locked(struct cdns_i3c_master *master)
 {
 	struct cdns_i3c_xfer *xfer = master->xferqueue.cur;
 	unsigned int i;
+	u8 *sub_addr;
 
 	if (!xfer)
 		return;
@@ -526,15 +595,22 @@ static void cdns_i3c_master_start_xfer_locked(struct cdns_i3c_master *master)
 	for (i = 0; i < xfer->ncmds; i++) {
 		struct cdns_i3c_cmd *cmd = &xfer->cmds[i];
 
-		cdns_i3c_master_wr_to_tx_fifo(master, cmd->tx_buf,
-					      cmd->tx_len);
+		if (!((data_write_or_read(xfer->ncmds, cmd->cmd0) ==  I3C_READ_DATA)))
+			cdns_i3c_master_wr_to_tx_fifo(master, cmd->tx_buf, cmd->tx_len);
 	}
 
 	for (i = 0; i < xfer->ncmds; i++) {
 		struct cdns_i3c_cmd *cmd = &xfer->cmds[i];
 
-		writel(cmd->cmd1 | CMD1_FIFO_CMDID(i),
-		       master->regs + CMD1_FIFO);
+		if ((data_write_or_read(xfer->ncmds, cmd->cmd0) ==  I3C_READ_DATA) && (!i)) {
+			sub_addr = (u8 *)cmd->tx_buf; /*store sub-address*/
+			continue;
+		}
+		if (data_write_or_read(xfer->ncmds, cmd->cmd0) ==  I3C_READ_DATA)
+			writel(cmd->cmd1 | CMD1_FIFO_CMDID(i) | *sub_addr, master->regs + CMD1_FIFO);
+		else
+			writel(cmd->cmd1 | CMD1_FIFO_CMDID(i), master->regs + CMD1_FIFO);
+
 		writel(cmd->cmd0, master->regs + CMD0_FIFO);
 	}
 
@@ -549,6 +625,8 @@ static void cdns_i3c_master_end_xfer_locked(struct cdns_i3c_master *master,
 	struct cdns_i3c_xfer *xfer = master->xferqueue.cur;
 	int i, ret = 0;
 	u32 status0;
+	u8 ccc_id = 0;
+	enum i3c_error_code err;
 
 	if (!xfer)
 		return;
@@ -578,6 +656,8 @@ static void cdns_i3c_master_end_xfer_locked(struct cdns_i3c_master *master,
 	}
 
 	for (i = 0; i < xfer->ncmds; i++) {
+		ccc_id = xfer->cmds[i].cmd1 & GENMASK(7, 0);
+		err = xfer->cmds[i].error;
 		switch (xfer->cmds[i].error) {
 		case CMDR_NO_ERROR:
 			break;
@@ -591,6 +671,8 @@ static void cdns_i3c_master_end_xfer_locked(struct cdns_i3c_master *master,
 		case CMDR_NACK_RESP:
 		case CMDR_DDR_DROPPED:
 			ret = -EIO;
+			if ((ccc_id == I3C_CCC_GETMXDS) && (err == CMDR_M0_ERROR))
+				ret = CMDR_NO_ERROR;
 			break;
 
 		case CMDR_DDR_RX_FIFO_OVF:
@@ -603,6 +685,9 @@ static void cdns_i3c_master_end_xfer_locked(struct cdns_i3c_master *master,
 			ret = -EINVAL;
 			break;
 		}
+		if (ret)
+			dev_warn(master->dev, "ccc_id = %x, err = %x\n", ccc_id,
+				err);
 	}
 
 	xfer->ret = ret;
@@ -764,14 +849,16 @@ static int cdns_i3c_master_i3c_xfers(struct i3c_dev_desc *dev,
 		struct cdns_i3c_cmd *ccmd = &cdns_xfer->cmds[i];
 		u32 pl_len = xfers[i].len;
 
-		ccmd->cmd0 = CMD0_FIFO_DEV_ADDR(dev->info.dyn_addr) |
-			CMD0_FIFO_PRIV_XMIT_MODE(XMIT_BURST_WITHOUT_SUBADDR);
+		ccmd->cmd0 = CMD0_FIFO_DEV_ADDR(dev->info.dyn_addr);
+		if (IS_I3C_READ(nxfers) == I3C_READ_DATA) /*For read data ,nxfers is 2*/
+			ccmd->cmd0 |= CMD0_FIFO_PRIV_XMIT_MODE(XMIT_SINGLE_INC_SUBADDR);
+		else /*For write data and ccc command ,nxfers is 1*/
+			ccmd->cmd0 |= CMD0_FIFO_PRIV_XMIT_MODE(XMIT_BURST_WITHOUT_SUBADDR);
 
 		if (xfers[i].rnw) {
 			ccmd->cmd0 |= CMD0_FIFO_RNW;
 			ccmd->rx_buf = xfers[i].data.in;
 			ccmd->rx_len = xfers[i].len;
-			pl_len++;
 		} else {
 			ccmd->tx_buf = xfers[i].data.out;
 			ccmd->tx_len = xfers[i].len;
@@ -797,6 +884,8 @@ static int cdns_i3c_master_i3c_xfers(struct i3c_dev_desc *dev,
 		xfers[i].err = cdns_i3c_cmd_get_err(&cdns_xfer->cmds[i]);
 
 	cdns_i3c_master_free_xfer(cdns_xfer);
+	pm_runtime_mark_last_busy(master->dev);
+	pm_runtime_put_autosuspend(master->dev);
 
 	return ret;
 }
@@ -834,10 +923,13 @@ static int cdns_i3c_master_i2c_xfers(struct i2c_dev_desc *dev,
 	for (i = 0; i < nxfers; i++) {
 		struct cdns_i3c_cmd *ccmd = &xfer->cmds[i];
 
+		/*find slave node by match slave address, then use the related xmit-mode to transfer*/
 		ccmd->cmd0 = CMD0_FIFO_DEV_ADDR(xfers[i].addr) |
-			CMD0_FIFO_PL_LEN(xfers[i].len) |
-			CMD0_FIFO_PRIV_XMIT_MODE(XMIT_BURST_WITHOUT_SUBADDR);
-
+			CMD0_FIFO_PL_LEN(xfers[i].len);
+			if (IS_I3C_READ(nxfers) == I3C_READ_DATA) /*For read data ,nxfers is 2*/
+				ccmd->cmd0 |= CMD0_FIFO_PRIV_XMIT_MODE(XMIT_SINGLE_INC_SUBADDR);
+			else /*For write data and ccc command ,nxfers is 1*/
+				ccmd->cmd0 |= CMD0_FIFO_PRIV_XMIT_MODE(XMIT_BURST_WITHOUT_SUBADDR);
 		if (xfers[i].flags & I2C_M_TEN)
 			ccmd->cmd0 |= CMD0_FIFO_IS_10B;
 
@@ -857,6 +949,8 @@ static int cdns_i3c_master_i2c_xfers(struct i2c_dev_desc *dev,
 
 	ret = xfer->ret;
 	cdns_i3c_master_free_xfer(xfer);
+	pm_runtime_mark_last_busy(master->dev);
+	pm_runtime_put_autosuspend(master->dev);
 
 	return ret;
 }
@@ -1309,6 +1403,8 @@ static void cdns_i3c_master_handle_ibi(struct cdns_i3c_master *master,
 		goto out;
 
 	dev = master->ibi.slots[id];
+	if(!dev)
+		return;
 	spin_lock(&master->ibi.lock);
 
 	data = i3c_dev_get_master_data(dev);
@@ -1558,10 +1654,11 @@ static int cdns_i3c_master_probe(struct platform_device *pdev)
 	if (!master)
 		return -ENOMEM;
 
-	master->devdata = of_device_get_match_data(&pdev->dev);
+	master->devdata = device_get_match_data(&pdev->dev);
 	if (!master->devdata)
 		return -EINVAL;
 
+	pinctrl_pm_select_default_state(&pdev->dev);
 	master->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(master->regs))
 		return PTR_ERR(master->regs);
@@ -1631,12 +1728,159 @@ static void cdns_i3c_master_remove(struct platform_device *pdev)
 	i3c_master_unregister(&master->base);
 }
 
+static int cdns_i3c_master_prepare_clks(struct cdns_i3c_master *master)
+{
+	int ret = 0;
+
+	ret = clk_prepare_enable(master->pclk);
+	if (ret)
+		return ret;
+	ret = clk_prepare_enable(master->sysclk);
+	if (ret) {
+		clk_disable_unprepare(master->pclk);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void cdns_i3c_master_unprepare_clks(struct cdns_i3c_master *master)
+{
+	clk_disable_unprepare(master->pclk);
+	clk_disable_unprepare(master->sysclk);
+}
+
+static int __maybe_unused cdns_i3c_runtime_suspend(struct device *dev)
+{
+	struct cdns_i3c_master *master = dev_get_drvdata(dev);
+
+	cdns_i3c_master_unprepare_clks(master);
+
+	return 0;
+}
+
+static int __maybe_unused cdns_i3c_runtime_resume(struct device *dev)
+{
+	struct cdns_i3c_master *master = dev_get_drvdata(dev);
+
+	cdns_i3c_master_prepare_clks(master);
+
+	return 0;
+}
+
+static int __maybe_unused cdns_i3c_suspend(struct device *dev)
+{
+	struct cdns_i3c_master *master = dev_get_drvdata(dev);
+	u32 rrx = 0;
+	int ret = 0;
+
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0) {
+		dev_err(dev, "%s pm_runtime_resume_and_get failed\n", __func__);
+		return ret;
+	}
+
+	/*begin to save register to ram*/
+	master->need_save_reg[CTRL_INDEX].value = readl(master->regs + CTRL);
+	master->need_save_reg[CTRL_INDEX].reg   = CTRL;
+
+	master->need_save_reg[PRESCL_CTRL0_INDEX].value = readl(master->regs + PRESCL_CTRL0);
+	master->need_save_reg[PRESCL_CTRL0_INDEX].reg   = PRESCL_CTRL0;
+
+	master->need_save_reg[PRESCL_CTRL1_INDEX].value = readl(master->regs + PRESCL_CTRL1);
+	master->need_save_reg[PRESCL_CTRL1_INDEX].reg   = PRESCL_CTRL1;
+
+	master->need_save_reg[MST_IDR_INDEX].value = 0xFFFFFFFF;
+	master->need_save_reg[MST_IDR_INDEX].reg   = MST_IDR;
+
+	master->need_save_reg[SLV_IDR_INDEX].value = 0xFFFFFFFF;
+	master->need_save_reg[SLV_IDR_INDEX].reg   = SLV_IDR;
+
+	master->need_save_reg[CMD_IBI_THR_CTRL_INDEX].value = readl(master->regs + CMD_IBI_THR_CTRL);
+	master->need_save_reg[CMD_IBI_THR_CTRL_INDEX].reg   = CMD_IBI_THR_CTRL;
+
+	master->need_save_reg[MST_IER_INDEX].value = MST_INT_IBIR_THR;
+	master->need_save_reg[MST_IER_INDEX].reg   = MST_IER;
+
+	master->need_save_reg[DEVS_CTRL_INDEX].value = readl(master->regs + DEVS_CTRL);
+	master->need_save_reg[DEVS_CTRL_INDEX].reg   = DEVS_CTRL;
+
+	master->need_save_reg[TX_RX_THR_CTRL_INDEX].value = readl(master->regs + TX_RX_THR_CTRL);
+	master->need_save_reg[TX_RX_THR_CTRL_INDEX].reg   = TX_RX_THR_CTRL;
+
+	while (rrx < (DEV_ID6_RR2_INDEX - DEV_ID0_RR0_INDEX)) {
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx].value = readl(master->regs + DEV_ID_RR0(rrx/3));
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx].reg   = DEV_ID_RR0(rrx/3);
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx + 1].value = readl(master->regs + DEV_ID_RR1(rrx/3));
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx + 1].reg   = DEV_ID_RR1(rrx/3);
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx + 2].value = readl(master->regs + DEV_ID_RR2(rrx/3));
+		master->need_save_reg[DEV_ID0_RR0_INDEX + rrx + 2].reg   = DEV_ID_RR2(rrx/3);
+		rrx += 3;
+	}
+
+	/*
+	 * enter suspend, switch pinctrl to another status,
+	 * otherwise when enter resume, pinctrl will not config
+	 */
+	pinctrl_pm_select_sleep_state(dev);
+	pm_runtime_put_noidle(dev);
+	pm_runtime_force_suspend(dev);
+
+	return 0;
+}
+
+static int __maybe_unused cdns_i3c_resume(struct device *dev)
+{
+	struct cdns_i3c_master *master = dev_get_drvdata(dev);
+	u32 reg_num = 0;
+	int ret = 0;
+
+	pinctrl_pm_select_default_state(dev);
+
+	pm_runtime_force_resume(dev);
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret) {
+		dev_err(dev, "%s pm_runtime_resume_and_get failed\n", __func__);
+		return ret;
+	}
+
+	/* reset */
+	reset_control_assert(master->i3c_reset);
+	/* release reset */
+	reset_control_deassert(master->i3c_reset);
+
+	while (reg_num < SAVE_MAX_REG_SIZE) {
+		writel(master->need_save_reg[reg_num].value,
+		       master->regs + master->need_save_reg[reg_num].reg);
+		reg_num++;
+	}
+
+	ret = i3c_master_do_daa(&master->base);
+	if (ret) {
+		dev_err(dev, "%s do daa failed\n", __func__);
+		return ret;
+	}
+
+	pm_runtime_put(dev);
+
+	return 0;
+}
+
+static const struct dev_pm_ops cdns_i3c_pm_ops = {
+	SET_RUNTIME_PM_OPS(cdns_i3c_runtime_suspend,
+			   cdns_i3c_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(cdns_i3c_suspend,
+			cdns_i3c_resume)
+};
+
 static struct platform_driver cdns_i3c_master = {
 	.probe = cdns_i3c_master_probe,
 	.remove = cdns_i3c_master_remove,
 	.driver = {
 		.name = "cdns-i3c-master",
 		.of_match_table = cdns_i3c_master_of_ids,
+		.acpi_match_table = ACPI_PTR(cdns_i3c_acpi_ids),
+		.pm = &cdns_i3c_pm_ops,
 	},
 };
 module_platform_driver(cdns_i3c_master);

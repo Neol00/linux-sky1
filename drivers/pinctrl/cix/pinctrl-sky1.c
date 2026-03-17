@@ -3,8 +3,10 @@
 // Author: Jerry Zhu <Jerry.Zhu@cixtech.com>
 // Author: Gary Yang <gary.yang@cixtech.com>
 
+#include <linux/acpi.h>
 #include <linux/err.h>
 #include <linux/init.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -14,6 +16,8 @@
 
 #include "../core.h"
 #include "pinctrl-sky1.h"
+
+#define SKY1_CONF_MASK		(0x7fL)
 
 /* Pad names for the s5 domain pinmux subsystem */
 static const char * const gpio1_group[] = {"GPIO1"};
@@ -497,6 +501,7 @@ static const struct sky1_pinctrl_soc_info sky1_pinctrl_s5_info = {
 };
 
 static const struct sky1_pinctrl_soc_info sky1_pinctrl_info = {
+	.flags = SKY1_PINCTRL_CONTEXT_LOSS_OFF,
 	.pins = sky1_pinctrl_pads,
 	.npins = ARRAY_SIZE(sky1_pinctrl_pads),
 };
@@ -508,9 +513,56 @@ static const struct of_device_id sky1_pinctrl_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, sky1_pinctrl_of_match);
 
+static const struct acpi_device_id pinctrl_acpi_ids[] = {
+	{"CIXHA016", (kernel_ulong_t)&sky1_pinctrl_info },
+	{"CIXHA017", (kernel_ulong_t)&sky1_pinctrl_s5_info },
+	{ },
+};
+MODULE_DEVICE_TABLE(acpi, pinctrl_acpi_ids);
+
+static int pinctrl_save_context(struct device *dev, struct sky1_pinctrl *spctl)
+{
+	int i;
+	unsigned long *reg;
+
+	if (!spctl->saved_vals) {
+		spctl->saved_vals = devm_kmalloc_array(dev, spctl->info->npins,
+					    sizeof(*reg),
+					    GFP_ATOMIC);
+		if (!spctl->saved_vals)
+			return -ENOMEM;
+	}
+
+	reg = spctl->saved_vals;
+	for (i = 0; i < spctl->info->npins; i++)
+		*reg++ = readl(spctl->base + spctl->pin_regs[i]) & ~SKY1_CONF_MASK;
+
+	return 0;
+}
+
+static void pinctrl_restore_context(struct sky1_pinctrl *spctl)
+{
+	int i;
+	unsigned long *reg;
+
+	reg = spctl->saved_vals;
+	for (i = 0; i < spctl->info->npins; i++)
+		writel(*reg++, spctl->base + spctl->pin_regs[i]);
+}
+
 static int __maybe_unused sky1_pinctrl_suspend(struct device *dev)
 {
 	struct sky1_pinctrl *spctl = dev_get_drvdata(dev);
+	if (!spctl)
+		return -EINVAL;
+
+	if (spctl->info->flags & SKY1_PINCTRL_CONTEXT_LOSS_OFF) {
+		int ret;
+
+		ret = pinctrl_save_context(dev, spctl);
+		if (ret < 0)
+			return ret;
+	}
 
 	return pinctrl_force_sleep(spctl->pctl);
 }
@@ -518,6 +570,11 @@ static int __maybe_unused sky1_pinctrl_suspend(struct device *dev)
 static int __maybe_unused sky1_pinctrl_resume(struct device *dev)
 {
 	struct sky1_pinctrl *spctl = dev_get_drvdata(dev);
+	if (!spctl)
+		return -EINVAL;
+
+	if (spctl->info->flags & SKY1_PINCTRL_CONTEXT_LOSS_OFF)
+		pinctrl_restore_context(spctl);
 
 	return pinctrl_force_default(spctl->pctl);
 }
@@ -530,18 +587,28 @@ static const struct dev_pm_ops sky1_pinctrl_pm_ops = {
 static int sky1_pinctrl_probe(struct platform_device *pdev)
 {
 	const struct sky1_pinctrl_soc_info *pinctrl_info;
+	int ret;
 
 	pinctrl_info = device_get_match_data(&pdev->dev);
-	if (!pinctrl_info)
+	if (!pinctrl_info) {
+		dev_err(&pdev->dev, "no match data\n");
 		return -ENODEV;
+	}
 
-	return sky1_base_pinctrl_probe(pdev, pinctrl_info);
+	ret = sky1_base_pinctrl_probe(pdev, pinctrl_info);
+	if (ret)
+		dev_err(&pdev->dev, "probe failed: %d\n", ret);
+	else
+		dev_info(&pdev->dev, "pinctrl registered\n");
+
+	return ret;
 }
 
 static struct platform_driver sky1_pinctrl_driver = {
 	.driver = {
 		.name = "sky1-pinctrl",
 		.of_match_table = sky1_pinctrl_of_match,
+		.acpi_match_table = pinctrl_acpi_ids,
 		.pm = &sky1_pinctrl_pm_ops,
 	},
 	.probe = sky1_pinctrl_probe,

@@ -293,6 +293,12 @@ struct hdac_bus {
 	const struct hdac_bus_ops *ops;
 	const struct hdac_ext_bus_ops *ext_ops;
 
+	/* address translation from host to hdac */
+	dma_addr_t (*addr_host_to_hdac)(struct hdac_bus *bus, dma_addr_t addr);
+
+	/* configure init verbs */
+	int (*config_init_verbs)(struct hdac_bus *bus, unsigned int vendor_id);
+
 	/* h/w resources */
 	unsigned long addr;
 	void __iomem *remap_addr;

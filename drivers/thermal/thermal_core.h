@@ -172,7 +172,9 @@ DEFINE_GUARD(thermal_zone_reverse, struct thermal_zone_device *,
 #define THERMAL_MAX_RECHECK_DELAY	(120 * HZ)
 
 /* Default Thermal Governor */
-#if defined(CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE)
+#if defined(CONFIG_THERMAL_DEFAULT_GOV_ACPI_DP)
+#define DEFAULT_THERMAL_GOVERNOR       "acpi_dp"
+#elif defined(CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE)
 #define DEFAULT_THERMAL_GOVERNOR       "step_wise"
 #elif defined(CONFIG_THERMAL_DEFAULT_GOV_FAIR_SHARE)
 #define DEFAULT_THERMAL_GOVERNOR       "fair_share"

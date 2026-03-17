@@ -2721,6 +2721,9 @@ int usb_hcd_find_raw_port_number(struct usb_hcd *hcd, int port1)
 	return hcd->driver->find_raw_port_number(hcd, port1);
 }
 
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+unsigned int irq_save;
+#endif
 static int usb_hcd_request_irqs(struct usb_hcd *hcd,
 		unsigned int irqnum, unsigned long irqflags)
 {
@@ -2738,6 +2741,10 @@ static int usb_hcd_request_irqs(struct usb_hcd *hcd,
 					irqnum);
 			return retval;
 		}
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+		disable_irq(irqnum);
+		irq_save = irqnum;
+#endif
 		hcd->irq = irqnum;
 		dev_info(hcd->self.controller, "irq %d, %s 0x%08llx\n", irqnum,
 				(hcd->driver->flags & HCD_MEMORY) ?

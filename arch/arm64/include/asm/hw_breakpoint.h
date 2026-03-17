@@ -11,7 +11,17 @@
 #include <asm/virt.h>
 
 struct arch_hw_breakpoint_ctrl {
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+	u32 reserved2 : 3, //29~31bit,
+	mask : 5, //24~28bit, addr mask，mask=0b11111: (mask2^0b11111 the low bit addr), support 8~2G range
+	reserved1 : 3, //21~23bit,
+	wt : 1, //20bit, watchpoint type, Unlinked(0)/linked(1) data address match.
+	lbn : 4, //16~19bit, WT is only required to be set when setting, which is related to link breakpoints
+	ssc : 2, //14,15bit, Security state control, which controls what state will listen for breakpoint events
+	hmc : 1, //13bit, Use in conjunction with the above fields
+#else
 	u32 __reserved	: 19,
+#endif
 	len		: 8,
 	type		: 2,
 	privilege	: 2,
@@ -32,8 +42,13 @@ struct arch_hw_breakpoint {
 
 static inline u32 encode_ctrl_reg(struct arch_hw_breakpoint_ctrl ctrl)
 {
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+	u32 val = (ctrl.mask << 24) | (ctrl.len << 5) | (ctrl.type << 3) |
+		  (ctrl.privilege << 1) | ctrl.enabled;
+#else
 	u32 val = (ctrl.len << 5) | (ctrl.type << 3) | (ctrl.privilege << 1) |
 		ctrl.enabled;
+#endif
 
 	if (is_kernel_in_hyp_mode() && ctrl.privilege == AARCH64_BREAKPOINT_EL1)
 		val |= DBG_HMC_HYP;
@@ -51,6 +66,10 @@ static inline void decode_ctrl_reg(u32 reg,
 	ctrl->type	= reg & 0x3;
 	reg >>= 2;
 	ctrl->len	= reg & 0xff;
+#ifdef CONFIG_PLAT_HW_BREAKPOINT
+	reg >>= 19;
+	ctrl->mask = reg & 0x1f;
+#endif
 }
 
 /* Breakpoint */

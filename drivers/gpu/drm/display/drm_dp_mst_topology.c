@@ -4940,7 +4940,7 @@ void drm_dp_mst_dump_topology(struct seq_file *m,
 		list_for_each_entry(payload, &state->payloads, next) {
 			char name[14];
 
-			if (payload->vcpi != i || payload->delete)
+			if (payload->vcpi != (i+1) || payload->delete)
 				continue;
 
 			fetch_monitor_name(mgr, payload->port, name, sizeof(name));

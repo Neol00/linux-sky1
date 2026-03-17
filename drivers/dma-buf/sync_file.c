@@ -17,6 +17,9 @@
 #include <linux/anon_inodes.h>
 #include <linux/sync_file.h>
 #include <uapi/linux/sync_file.h>
+#ifdef CONFIG_PLAT_FDLEAK
+#include <linux/soc/cix/dst_fdleak.h>
+#endif
 
 static const struct file_operations sync_file_fops;
 
@@ -190,6 +193,10 @@ static int sync_file_release(struct inode *inode, struct file *file)
 		dma_fence_remove_callback(sync_file->fence, &sync_file->cb);
 	dma_fence_put(sync_file->fence);
 	kfree(sync_file);
+
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_SYNCFENCE, 1);
+#endif
 
 	return 0;
 }

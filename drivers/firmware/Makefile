@@ -32,6 +32,7 @@ obj-y				+= microchip/
 obj-$(CONFIG_GOOGLE_FIRMWARE)	+= google/
 obj-y				+= efi/
 obj-y				+= imx/
+obj-y				+= cix/
 obj-y				+= psci/
 obj-y				+= qcom/
 obj-y				+= samsung/

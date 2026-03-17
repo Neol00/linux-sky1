@@ -62,7 +62,7 @@ config DEBUG_GPIO
 	  that are most common when setting up new platforms or boards.
 
 config GPIO_SYSFS
-	bool "/sys/class/gpio/... (sysfs interface)" if EXPERT
+	bool "/sys/class/gpio/... (sysfs interface)"
 	depends on SYSFS
 	select GPIO_CDEV # We need to encourage the new ABI
 	help
@@ -248,7 +248,7 @@ config GPIO_BRCMSTB
 
 config GPIO_CADENCE
 	tristate "Cadence GPIO support"
-	depends on OF_GPIO
+	depends on (OF_GPIO || ACPI)
 	select GPIO_GENERIC
 	select GPIOLIB_IRQCHIP
 	help

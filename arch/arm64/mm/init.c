@@ -49,6 +49,10 @@
 #include <asm/alternative.h>
 #include <asm/xen/swiotlb-xen.h>
 
+#ifdef CONFIG_PLAT_KERNELDUMP
+void __init kernel_dump_mem_reserve(void);
+#endif
+
 /*
  * We need to be able to catch inadvertent references to memstart_addr
  * that occur (potentially in generic code) before arm64_memblock_init()
@@ -233,6 +237,10 @@ void __init arm64_memblock_init(void)
 					 ARM64_MEMSTART_ALIGN);
 		memblock_remove(0, memstart_addr);
 	}
+
+#ifdef CONFIG_PLAT_KERNELDUMP
+	kernel_dump_mem_reserve();
+#endif
 
 	/*
 	 * If we are running with a 52-bit kernel VA config on a system that

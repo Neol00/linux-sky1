@@ -25,6 +25,11 @@
 
 #include "thermal_trace.h"
 
+#ifdef CONFIG_CIX_THERMAL
+int cix_get_static_power_cpus(cpumask_var_t cpus);
+int cix_get_dynamic_power_cpus(cpumask_var_t cpus);
+#endif
+
 /*
  * Cooling state <-> CPUFreq frequency
  *
@@ -251,7 +256,11 @@ static int cpufreq_get_requested_power(struct thermal_cooling_device *cdev,
 
 	cpufreq_cdev->last_load = total_load;
 
+#ifdef CONFIG_CIX_THERMAL
+	*power = cix_get_static_power_cpus(policy->cpus) + cix_get_dynamic_power_cpus(policy->cpus);
+#else
 	*power = get_dynamic_power(cpufreq_cdev, freq);
+#endif
 
 	trace_thermal_power_cpu_get_power_simple(policy->cpu, *power);
 
@@ -293,6 +302,9 @@ static int cpufreq_state2power(struct thermal_cooling_device *cdev,
 
 	*power = cpu_freq_to_power(cpufreq_cdev, freq) * num_cpus;
 
+#ifdef CONFIG_CIX_THERMAL
+	*power += cix_get_static_power_cpus(cpufreq_cdev->policy->cpus);
+#endif
 	return 0;
 }
 
@@ -319,8 +331,16 @@ static int cpufreq_power2state(struct thermal_cooling_device *cdev,
 	struct cpufreq_cooling_device *cpufreq_cdev = cdev->devdata;
 	struct cpufreq_policy *policy = cpufreq_cdev->policy;
 
+#ifdef CONFIG_CIX_THERMAL
+	u32 static_power = cix_get_static_power_cpus(policy->cpus);
+	if (power > static_power)
+		normalised_power = power - static_power;
+	else
+		normalised_power = 0;
+#else
 	last_load = cpufreq_cdev->last_load ?: 1;
 	normalised_power = (power * 100) / last_load;
+#endif
 	target_freq = cpu_power_to_freq(cpufreq_cdev, normalised_power);
 
 	*state = get_level(cpufreq_cdev, target_freq);

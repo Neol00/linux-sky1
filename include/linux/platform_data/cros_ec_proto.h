@@ -211,6 +211,9 @@ struct cros_ec_device {
 	struct platform_device *pd;
 
 	struct blocking_notifier_head panic_notifier;
+#ifdef CONFIG_CIX_EC
+	struct ec_response_int_get_info irq_info;
+#endif
 };
 
 /**

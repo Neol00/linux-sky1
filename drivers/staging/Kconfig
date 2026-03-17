@@ -36,6 +36,8 @@ source "drivers/staging/nvec/Kconfig"
 
 source "drivers/staging/media/Kconfig"
 
+source "drivers/staging/android/Kconfig"
+
 source "drivers/staging/fbtft/Kconfig"
 
 source "drivers/staging/most/Kconfig"
@@ -47,5 +49,11 @@ source "drivers/staging/vc04_services/Kconfig"
 source "drivers/staging/axis-fifo/Kconfig"
 
 source "drivers/staging/vme_user/Kconfig"
+
+source "drivers/staging/hungtask/Kconfig"
+
+source "drivers/staging/hievent/Kconfig"
+
+source "drivers/staging/hisysevent/Kconfig"
 
 endif # STAGING

@@ -43,6 +43,12 @@
 #include <asm/system_misc.h>
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+#include <linux/soc/cix/dst_audio_timeout_error.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+#include <linux/soc/cix/dst_rcsu_gasket_error.h>
+#endif
 
 struct fault_info {
 	int	(*fn)(unsigned long far, unsigned long esr,
@@ -122,6 +128,7 @@ static inline unsigned long mm_to_pgd_phys(struct mm_struct *mm)
 	return (unsigned long)virt_to_phys(mm->pgd);
 }
 
+#ifdef CONFIG_MMU
 /*
  * Dump out the page tables associated with 'addr' in the currently active mm.
  */
@@ -193,7 +200,10 @@ static void show_pte(unsigned long addr)
 
 	pr_cont("\n");
 }
-
+#else					/* CONFIG_MMU */
+void show_pte(unsigned long addr)
+{ }
+#endif					/* CONFIG_MMU */
 /*
  * This function sets the access flags (dirty, accessed), as well as write
  * permission, and only to a more permissive setting.

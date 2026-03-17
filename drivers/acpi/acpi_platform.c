@@ -22,6 +22,7 @@
 
 /* Exclude devices that have no _CRS resources provided */
 #define ACPI_ALLOW_WO_RESOURCES		BIT(0)
+#define MAX_ACPI_FIBIDDEN_ID_LIST	16
 
 static const struct acpi_device_id forbidden_id_list[] = {
 	{"ACPI0009", 0},	/* IOxAPIC */
@@ -32,6 +33,23 @@ static const struct acpi_device_id forbidden_id_list[] = {
 	{ACPI_SMBUS_MS_HID,  ACPI_ALLOW_WO_RESOURCES},	/* ACPI SMBUS virtual device */
 	{ }
 };
+
+struct acpi_forbidden_ext {
+	int len;
+	struct acpi_device_id *id_list[MAX_ACPI_FIBIDDEN_ID_LIST];
+} acpi_forbidden_ext;
+
+/* Here just concern one case the early phase to register forbidden ids. */
+int forbidden_ids_register(struct acpi_device_id *ids) {
+	if (ids && acpi_forbidden_ext.len < MAX_ACPI_FIBIDDEN_ID_LIST) {
+		acpi_forbidden_ext.id_list[acpi_forbidden_ext.len] = ids;
+		acpi_forbidden_ext.len++;
+	} else {
+		return -EINVAL;
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(forbidden_ids_register);
 
 static struct platform_device *acpi_platform_device_find_by_companion(struct acpi_device *adev)
 {
@@ -122,6 +140,14 @@ struct platform_device *acpi_create_platform_device(struct acpi_device *adev,
 		return NULL;
 
 	match = acpi_match_acpi_device(forbidden_id_list, adev);
+	if (!match) {
+		for (int i = 0; i < acpi_forbidden_ext.len; i++) {
+			match = acpi_match_acpi_device(acpi_forbidden_ext.id_list[i], adev);
+			if (match) {
+				break;
+			}
+		}
+	}
 	if (match) {
 		if (match->driver_data & ACPI_ALLOW_WO_RESOURCES) {
 			bool has_resources = false;

@@ -965,6 +965,9 @@ static int ep_eventpoll_release(struct inode *inode, struct file *file)
 	if (ep)
 		ep_clear_and_put(ep);
 
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_EVENTPOLL, 1);
+#endif
 	return 0;
 }
 

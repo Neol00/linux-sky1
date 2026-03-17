@@ -12,6 +12,7 @@
 #include <sound/sof/header.h>
 #include <sound/sof/dai-intel.h>
 #include <sound/sof/dai-imx.h>
+#include <sound/sof/dai-cix.h>
 #include <sound/sof/dai-amd.h>
 #include <sound/sof/dai-mediatek.h>
 

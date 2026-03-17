@@ -10,12 +10,14 @@
 
 #include <linux/cleanup.h>
 #include <linux/clk.h>
+#include <linux/device.h>
 #include <linux/err.h>
 #include <linux/hwspinlock.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/mfd/syscon.h>
@@ -360,3 +362,39 @@ struct regmap *syscon_regmap_lookup_by_phandle_optional(struct device_node *np,
 	return regmap;
 }
 EXPORT_SYMBOL_GPL(syscon_regmap_lookup_by_phandle_optional);
+
+struct regmap *device_syscon_regmap_lookup_by_property(struct device *dev,
+						       const char *property)
+{
+	if (dev->of_node)
+		return syscon_regmap_lookup_by_phandle(dev->of_node, property);
+
+	/*
+	 * ACPI fallback: use fwnode_find_reference() to resolve the property
+	 * to a device, then retrieve its regmap via dev_get_regmap().
+	 */
+	if (dev_fwnode(dev)) {
+		struct fwnode_handle *ref_fn;
+		struct device *ref_dev;
+		struct regmap *regmap;
+
+		ref_fn = fwnode_find_reference(dev_fwnode(dev), property, 0);
+		if (IS_ERR(ref_fn))
+			return ERR_CAST(ref_fn);
+
+		ref_dev = get_dev_from_fwnode(ref_fn);
+		fwnode_handle_put(ref_fn);
+		if (!ref_dev)
+			return ERR_PTR(-EPROBE_DEFER);
+
+		regmap = dev_get_regmap(ref_dev, NULL);
+		put_device(ref_dev);
+		if (!regmap)
+			return ERR_PTR(-EPROBE_DEFER);
+
+		return regmap;
+	}
+
+	return ERR_PTR(-ENODEV);
+}
+EXPORT_SYMBOL_GPL(device_syscon_regmap_lookup_by_property);

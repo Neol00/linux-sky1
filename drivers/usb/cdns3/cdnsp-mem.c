@@ -865,7 +865,7 @@ static unsigned int cdnsp_get_endpoint_interval(struct usb_gadget *g,
 static u32 cdnsp_get_endpoint_mult(struct usb_gadget *g, struct cdnsp_ep *pep)
 {
 	if (g->speed < USB_SPEED_SUPER ||
-	    !usb_endpoint_xfer_isoc(pep->endpoint.desc))
+	    !usb_endpoint_xfer_isoc(pep->endpoint.desc) || g->speed >= USB_SPEED_SUPER_PLUS)
 		return 0;
 
 	return pep->endpoint.comp_desc->bmAttributes;

@@ -425,6 +425,7 @@ int register_cpu(struct cpu *cpu, int num)
 	cpu->dev.offline_disabled = !cpu->hotpluggable;
 	cpu->dev.offline = !cpu_online(num);
 	cpu->dev.of_node = of_get_cpu_node(num, NULL);
+	cpu->dev.fwnode = of_fwnode_handle(cpu->dev.of_node);
 	cpu->dev.groups = common_cpu_attr_groups;
 	if (cpu->hotpluggable)
 		cpu->dev.groups = hotplugable_cpu_attr_groups;

@@ -301,6 +301,7 @@ source "sound/soc/sof/amd/Kconfig"
 source "sound/soc/sof/imx/Kconfig"
 source "sound/soc/sof/intel/Kconfig"
 source "sound/soc/sof/mediatek/Kconfig"
+source "sound/soc/sof/cix/Kconfig"
 source "sound/soc/sof/xtensa/Kconfig"
 
 endif

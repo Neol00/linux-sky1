@@ -63,4 +63,14 @@ config HSEM_U8500
 
 	  If unsure, say N.
 
+config HWSPINLOCK_SKY1
+	tristate "Sky1 Hardware Spinlock device"
+	depends on ARCH_CIX || COMPILE_TEST
+	help
+	  Say y here to support the Sky1 Hardware Mutex functionality, which
+	  provides a synchronisation mechanism for the various processors on
+	  the SoC.
+
+	  If unsure, say N.
+
 endif # HWSPINLOCK

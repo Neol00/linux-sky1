@@ -2537,6 +2537,8 @@ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_ASMEDIA, 0x1080, quirk_disable_aspm_l0s_l
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_FREESCALE, 0x0451, quirk_disable_aspm_l0s_l1);
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_PASEMI, 0xa002, quirk_disable_aspm_l0s_l1);
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_HUAWEI, 0x1105, quirk_disable_aspm_l0s_l1);
+DECLARE_PCI_FIXUP_FINAL(0x1987, 0x5013, quirk_disable_aspm_l0s_l1);	/* tinkplus */
+DECLARE_PCI_FIXUP_FINAL(0x2646, 0x501d, quirk_disable_aspm_l0s_l1);	/* kingston */
 
 /*
  * Some Pericom PCIe-to-PCI bridges in reverse mode need the PCIe Retrain
@@ -6379,4 +6381,27 @@ static void pci_mask_replay_timer_timeout(struct pci_dev *pdev)
 }
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_GLI, 0x9750, pci_mask_replay_timer_timeout);
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_GLI, 0x9755, pci_mask_replay_timer_timeout);
+#endif
+
+#ifdef CONFIG_ARM64
+/*
+ * Fix for CIX platforms where ACPI _CRS does not define IO windows,
+ * but endpoints request them, causing noisy boot errors.
+ * Realtek 8126 and NVIDIA GPUs work fine with just MMIO.
+ */
+static void quirk_cix_disable_io_bar(struct pci_dev *dev)
+{
+int i;
+
+for (i = 0; i < PCI_STD_NUM_BARS; i++) {
+if (pci_resource_flags(dev, i) & IORESOURCE_IO) {
+pci_info(dev, "Disabling IO BAR %d on CIX platform\n", i);
+dev->resource[i].flags = 0;
+dev->resource[i].start = 0;
+dev->resource[i].end = 0;
+}
+}
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_REALTEK, 0x8126, quirk_cix_disable_io_bar);
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_NVIDIA, 0x1e04, quirk_cix_disable_io_bar);
 #endif

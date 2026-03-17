@@ -5,7 +5,7 @@
 #ifdef CONFIG_NUMA_MEMBLKS
 #include <linux/types.h>
 
-#define NR_NODE_MEMBLKS		(MAX_NUMNODES * 2)
+#define NR_NODE_MEMBLKS		(MAX_NUMNODES * 4)
 
 void __init numa_set_distance(int from, int to, int distance);
 void __init numa_reset_distance(void);

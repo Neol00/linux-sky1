@@ -15,7 +15,7 @@
 #include "pcie-cadence-host-common.h"
 
 static u8 bar_aperture_mask[] = {
-	[RP_BAR0] = 0x1F,
+	[RP_BAR0] = 0xF,
 	[RP_BAR1] = 0xF,
 };
 
@@ -39,11 +39,6 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 
 		return pcie->reg_base + (where & 0xfff);
 	}
-	/* Check that the link is up */
-	if (!(cdns_pcie_readl(pcie, CDNS_PCIE_LM_BASE) & 0x1))
-		return NULL;
-	/* Clear AXI link-down status */
-	cdns_pcie_writel(pcie, CDNS_PCIE_AT_LINKDOWN, 0x0);
 
 	/* Update Output registers for AXI region 0. */
 	addr0 = CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS(12) |
@@ -52,16 +47,16 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_PCI_ADDR0(0), addr0);
 
 	/* Configuration Type 0 or Type 1 access. */
-	desc0 = CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID |
-		CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(0);
 	/*
 	 * The bus number was already set once for all in desc1 by
 	 * cdns_pcie_host_init_address_translation().
 	 */
 	if (busn == bridge->busnr + 1)
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE0;
+		desc0 = CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE0;
 	else
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE1;
+		desc0 = CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE1;
+	desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID |
+		 CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(0);
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC0(0), desc0);
 
 	return rc->cfg_base + (where & 0xfff);
@@ -139,6 +134,9 @@ static int cdns_pcie_host_init_root_port(struct cdns_pcie_rc *rc)
 			CDNS_PCIE_LM_ID_SUBSYS(rc->vendor_id);
 		cdns_pcie_writel(pcie, CDNS_PCIE_LM_ID, id);
 	}
+
+	if (rc->vendor_id != 0xffff)
+		cdns_pcie_rp_writew(pcie, PCI_VENDOR_ID, rc->vendor_id);
 
 	if (rc->device_id != 0xffff)
 		cdns_pcie_rp_writew(pcie, PCI_DEVICE_ID, rc->device_id);
@@ -253,7 +251,8 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 	struct resource_entry *entry;
 	u64 cpu_addr = cfg_res->start;
 	u32 addr0, addr1, desc1;
-	int r, busnr = 0;
+	int busnr = 0;
+	int r;
 
 	entry = resource_list_first_type(&bridge->windows, IORESOURCE_BUS);
 	if (entry)
@@ -289,7 +288,7 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 						      pci_pio_to_address(res->start),
 						      pci_addr,
 						      resource_size(res));
-		else
+		else if (resource_type(res) == IORESOURCE_MEM)
 			cdns_pcie_set_outbound_region(pcie, busnr, 0, r,
 						      false,
 						      res->start,
@@ -349,7 +348,7 @@ int cdns_pcie_host_link_setup(struct cdns_pcie_rc *rc)
 	if (ret)
 		dev_dbg(dev, "PCIe link never came up\n");
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(cdns_pcie_host_link_setup);
 
@@ -370,7 +369,6 @@ int cdns_pcie_host_setup(struct cdns_pcie_rc *rc)
 {
 	struct device *dev = rc->pcie.dev;
 	struct platform_device *pdev = to_platform_device(dev);
-	struct device_node *np = dev->of_node;
 	struct pci_host_bridge *bridge;
 	enum cdns_pcie_rp_bar bar;
 	struct cdns_pcie *pcie;
@@ -384,23 +382,29 @@ int cdns_pcie_host_setup(struct cdns_pcie_rc *rc)
 	pcie = &rc->pcie;
 	pcie->is_rc = true;
 
-	rc->vendor_id = 0xffff;
-	of_property_read_u32(np, "vendor-id", &rc->vendor_id);
-
-	rc->device_id = 0xffff;
-	of_property_read_u32(np, "device-id", &rc->device_id);
-
-	pcie->reg_base = devm_platform_ioremap_resource_byname(pdev, "reg");
-	if (IS_ERR(pcie->reg_base)) {
-		dev_err(dev, "missing \"reg\"\n");
-		return PTR_ERR(pcie->reg_base);
+	if ((rc->vendor_id==0)||(rc->vendor_id==0xffff)) {
+		device_property_read_u32(dev, "vendor-id", &rc->vendor_id);
 	}
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cfg");
-	rc->cfg_base = devm_pci_remap_cfg_resource(dev, res);
-	if (IS_ERR(rc->cfg_base))
-		return PTR_ERR(rc->cfg_base);
-	rc->cfg_res = res;
+	if ((rc->device_id==0)||(rc->device_id==0xffff)) {
+		device_property_read_u32(dev, "device-id", &rc->device_id);
+	}
+
+	if (!pcie->reg_base) {
+		pcie->reg_base = devm_platform_ioremap_resource_byname(pdev, "reg");
+		if (IS_ERR(pcie->reg_base)) {
+			dev_err(dev, "missing \"reg\"\n");
+			return PTR_ERR(pcie->reg_base);
+		}
+	}
+
+	if (!rc->cfg_base) { /* ECAM config space is remapped at glue layer */
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cfg");
+		rc->cfg_base = devm_pci_remap_cfg_resource(dev, res);
+		if (IS_ERR(rc->cfg_base))
+			return PTR_ERR(rc->cfg_base);
+		rc->cfg_res = res;
+	}
 
 	ret = cdns_pcie_host_link_setup(rc);
 	if (ret)

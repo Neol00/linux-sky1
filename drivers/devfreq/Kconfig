@@ -161,6 +161,33 @@ config ARM_SUN8I_A33_MBUS_DEVFREQ
 	  This adds the DEVFREQ driver for the MBUS controller in some
 	  Allwinner sun8i (A33 through H3) and sun50i (A64 and H5) SoCs.
 
+config ARM64_DSU_PCTRL_DEVFREQ
+        tristate "ARM DSU Cache Portion Control DEVFREQ Driver"
+        depends on ARM64
+        select PM_OPP
+        help
+          This adds the DevFreq driver for energy-cost-justified demand-driven
+          portion control of the ARM DSU cache.
+          This driver does not control frequency.
+
+          It uses architecture specific instructions which might cause
+          fault when some ARM64 platform does not support it.
+          Make sure this driver works with your ARM64 platform.
+
+          If unsure, say N.
+
+config ARM_CIX_BUS_DEVFREQ
+        tristate "ARM Cix Generic Bus DEVFREQ Driver"
+        depends on ARCH_CIX || COMPILE_TEST
+        select DEVFREQ_GOV_SIMPLE_ONDEMAND
+        select DEVFREQ_GOV_USERSPACE
+        help
+          This adds the common DEVFREQ driver for Cix Memory bus. Cix bus has
+          one more group of bus (e.g, CI-700 and NI-700 block).Each bus group
+          could contain many memoby bus block.adjusts the operating frequencies
+          and voltages with OPP support.
+          This does not yet operate with optimal voltages.
+
 source "drivers/devfreq/event/Kconfig"
 
 endif # PM_DEVFREQ

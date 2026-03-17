@@ -12,3 +12,5 @@ inv-icm42600-i2c-y += inv_icm42600_i2c.o
 
 obj-$(CONFIG_INV_ICM42600_SPI) += inv-icm42600-spi.o
 inv-icm42600-spi-y += inv_icm42600_spi.o
+
+obj-$(CONFIG_INV_ICM42600_SPI_REGMAP_REF) += cix_regmap_ref_spi.o

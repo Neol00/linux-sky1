@@ -520,6 +520,18 @@ config HW_RANDOM_OPTEE
 
 	  If unsure, say Y.
 
+config HW_RANDOM_SKY1
+	tristate "SKY1 Random Number Generator support"
+	default HW_RANDOM
+	help
+	  This driver provides kernel-side support for the Random Number
+	  Generator hardware found on SKY1 SoC.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sky1-rng.
+
+	  If unsure, say Y.
+
 config HW_RANDOM_NPCM
 	tristate "NPCM Random Number Generator support"
 	depends on ARCH_NPCM || COMPILE_TEST

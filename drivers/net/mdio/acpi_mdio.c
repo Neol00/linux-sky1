@@ -18,6 +18,8 @@ MODULE_AUTHOR("Calvin Johnson <calvin.johnson@oss.nxp.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("ACPI MDIO bus (Ethernet PHY) accessors");
 
+#define DEFAULT_RESET_DELAY	10
+
 /**
  * __acpi_mdiobus_register - Register mii_bus and create PHYs from the ACPI ASL.
  * @mdio: pointer to mii_bus structure
@@ -36,13 +38,20 @@ int __acpi_mdiobus_register(struct mii_bus *mdio, struct fwnode_handle *fwnode,
 	u32 addr;
 	int ret;
 
+	ACPI_COMPANION_SET(&mdio->dev, to_acpi_device_node(fwnode));
+
+	/* Get bus level PHY reset GPIO details */
+	mdio->reset_delay_us = DEFAULT_RESET_DELAY;
+	device_property_read_u32(&mdio->dev, "reset-delay-us",
+				 &mdio->reset_delay_us);
+	device_property_read_u32(&mdio->dev, "reset-post-delay-us",
+				 &mdio->reset_post_delay_us);
+
 	/* Mask out all PHYs from auto probing. */
 	mdio->phy_mask = GENMASK(31, 0);
 	ret = __mdiobus_register(mdio, owner);
 	if (ret)
 		return ret;
-
-	ACPI_COMPANION_SET(&mdio->dev, to_acpi_device_node(fwnode));
 
 	/* Loop over the child nodes and register a phy_device for each PHY */
 	fwnode_for_each_child_node(fwnode, child) {

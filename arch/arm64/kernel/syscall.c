@@ -129,7 +129,13 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			goto trace_exit;
 	}
 
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 0);
+#endif
 	invoke_syscall(regs, scno, sc_nr, syscall_table);
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 1);
+#endif
 
 	/*
 	 * The tracing status may have changed under our feet, so we have to

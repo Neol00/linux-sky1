@@ -95,6 +95,10 @@ static __always_inline unsigned long long __sched_clock(void)
 		res = rd->epoch_ns + cyc_to_ns(cyc, rd->mult, rd->shift);
 	} while (raw_read_seqcount_latch_retry(&cd.seq, seq));
 
+#ifdef CONFIG_CIX_CPU_INSTPIPE_FRESH
+	isb();
+#endif
+
 	return res;
 }
 

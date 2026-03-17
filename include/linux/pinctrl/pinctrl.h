@@ -26,6 +26,7 @@ struct pinconf_ops;
 struct pinctrl_dev;
 struct pinctrl_map;
 struct pinmux_ops;
+struct pinctrl_acpi_resource;
 
 /**
  * struct pingroup - provides information on pingroup
@@ -105,6 +106,15 @@ struct pinctrl_gpio_range {
  *	allocated members of the mapping table entries themselves. This
  *	function is optional, and may be omitted for pinctrl drivers that do
  *	not support device tree.
+ * @acpi_node_to_map: process ACPI pin related properties, and create
+ *	mapping table entries for it. These are returned through the @map and
+ *	@num_maps output parameters. This function is optional, and may be
+ *	omitted for pinctrl drivers that do not support ACPI.
+ * @acpi_free_map: free mapping table entries created via @acpi_node_to_map. The
+ *	top-level @map pointer must be freed, along with any dynamically
+ *	allocated members of the mapping table entries themselves. This
+ *	function is optional, and may be omitted for pinctrl drivers that do
+ *	not support ACPI.
  */
 struct pinctrl_ops {
 	int (*get_groups_count) (struct pinctrl_dev *pctldev);
@@ -121,6 +131,12 @@ struct pinctrl_ops {
 			       struct pinctrl_map **map, unsigned int *num_maps);
 	void (*dt_free_map) (struct pinctrl_dev *pctldev,
 			     struct pinctrl_map *map, unsigned int num_maps);
+	int (*acpi_node_to_map) (struct pinctrl_dev *pctldev,
+				 struct pinctrl_acpi_resource *resource,
+				 struct pinctrl_map **map,
+				 unsigned int *num_maps);
+	void (*acpi_free_map) (struct pinctrl_dev *pctldev,
+			       struct pinctrl_map *map, unsigned int num_maps);
 };
 
 /**

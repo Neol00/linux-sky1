@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
+export TARGET_SOC_PLATFORM := sky1
 VERSION = 7
 PATCHLEVEL = 0
 SUBLEVEL = 0
-EXTRAVERSION = -rc3
+EXTRAVERSION = -sky1
 NAME = Baby Opossum Posse
 
 # *DOCUMENTATION*
@@ -583,6 +584,8 @@ LINUXINCLUDE    := \
 		-I$(srctree)/include \
 		-I$(objtree)/include \
 		$(USERINCLUDE)
+
+LINUXINCLUDE += -I$(srctree)/include/soc/cix/ap/platform/$(TARGET_SOC_PLATFORM)
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__ -fno-PIE
 

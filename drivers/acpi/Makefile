@@ -32,7 +32,7 @@ acpi-y				+= nvs.o
 # Power management related files
 acpi-y				+= wakeup.o
 acpi-$(CONFIG_ACPI_SYSTEM_POWER_STATES_SUPPORT) += sleep.o
-acpi-y				+= device_sysfs.o device_pm.o
+acpi-y				+= device_sysfs.o device_pm.o device_perf.o
 acpi-$(CONFIG_ACPI_SLEEP)	+= proc.o
 
 
@@ -72,6 +72,7 @@ acpi-$(CONFIG_ACPI_MRRM)	+= acpi_mrrm.o
 acpi-$(CONFIG_ACPI_ADXL)	+= acpi_adxl.o
 
 # These are (potentially) separate modules
+obj-$(CONFIG_CIX_ACPI_POWER_DOMAIN)	+= cix_acpi_pd.o
 
 # IPMI may be used by other drivers, so it has to initialise before them
 obj-$(CONFIG_ACPI_IPMI)		+= acpi_ipmi.o

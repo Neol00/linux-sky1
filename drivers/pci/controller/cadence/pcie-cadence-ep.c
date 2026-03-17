@@ -125,7 +125,7 @@ static int cdns_pcie_ep_set_bar(struct pci_epc *epc, u8 fn, u8 vfn,
 		reg = CDNS_PCIE_LM_EP_VFUNC_BAR_CFG(bar, fn);
 	else
 		reg = CDNS_PCIE_LM_EP_FUNC_BAR_CFG(bar, fn);
-	b = (bar < BAR_4) ? bar : bar - BAR_4;
+	b = (bar < BAR_3) ? bar : bar - BAR_3;
 
 	if (vfn == 0 || vfn == 1) {
 		cfg = cdns_pcie_readl(pcie, reg);
@@ -162,7 +162,7 @@ static void cdns_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn, u8 vfn,
 		reg = CDNS_PCIE_LM_EP_VFUNC_BAR_CFG(bar, fn);
 	else
 		reg = CDNS_PCIE_LM_EP_FUNC_BAR_CFG(bar, fn);
-	b = (bar < BAR_4) ? bar : bar - BAR_4;
+	b = (bar < BAR_3) ? bar : bar - BAR_3;
 
 	if (vfn == 0 || vfn == 1) {
 		ctrl = CDNS_PCIE_LM_BAR_CFG_CTRL_DISABLED;
@@ -578,7 +578,7 @@ static int cdns_pcie_ep_start(struct pci_epc *epc)
 	 * BIT(0) is hardwired to 1, hence function 0 is always enabled
 	 * and can't be disabled anyway.
 	 */
-	cdns_pcie_writel(pcie, CDNS_PCIE_LM_EP_FUNC_CFG, epc->function_num_map);
+//	cdns_pcie_writel(pcie, CDNS_PCIE_LM_EP_FUNC_CFG, epc->function_num_map);
 
 	/*
 	 * Next function field in ARI_CAP_AND_CTR register for last function
@@ -699,7 +699,7 @@ int cdns_pcie_ep_setup(struct cdns_pcie_ep *ep)
 		return -ENOMEM;
 
 	/* Disable all but function 0 (anyway BIT(0) is hardwired to 1). */
-	cdns_pcie_writel(pcie, CDNS_PCIE_LM_EP_FUNC_CFG, BIT(0));
+//	cdns_pcie_writel(pcie, CDNS_PCIE_LM_EP_FUNC_CFG, BIT(0));
 
 	epc = devm_pci_epc_create(dev, &cdns_pcie_epc_ops);
 	if (IS_ERR(epc)) {

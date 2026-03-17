@@ -19,6 +19,7 @@ struct sky1_pin_desc {
 };
 
 struct sky1_pinctrl_soc_info {
+	unsigned int flags;
 	const struct sky1_pin_desc *pins;
 	unsigned int npins;
 };
@@ -30,6 +31,13 @@ struct sky1_pinctrl_soc_info {
 		.nfunc = ARRAY_SIZE(_func##_group),		\
 	})
 /**
+ * sky1_pin_reg contains 32 bits
+ * bit7:bit8 for function select
+ * bit0:bit6 for pad configuration
+ */
+typedef u32 sky1_pin_reg;
+
+/**
  * @dev: a pointer back to containing device
  * @base: the offset to the controller in virtual memory
  */
@@ -40,7 +48,14 @@ struct sky1_pinctrl {
 	const struct sky1_pinctrl_soc_info *info;
 	struct sky1_pinctrl_group *groups;
 	const char **grp_names;
+	sky1_pin_reg *pin_regs;
+	unsigned int group_index;
+	struct mutex mutex;
+	unsigned long *saved_vals;
 };
+
+// Flags based on pinctrl-single.c
+#define SKY1_PINCTRL_CONTEXT_LOSS_OFF	(1 << 3)
 
 int sky1_base_pinctrl_probe(struct platform_device *pdev,
 			const struct sky1_pinctrl_soc_info *info);

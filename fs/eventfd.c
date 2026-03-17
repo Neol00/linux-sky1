@@ -24,6 +24,9 @@
 #include <linux/seq_file.h>
 #include <linux/idr.h>
 #include <linux/uio.h>
+#ifdef CONFIG_PLAT_FDLEAK
+#include <linux/soc/cix/dst_fdleak.h>
+#endif
 
 static DEFINE_IDA(eventfd_ida);
 
@@ -112,6 +115,9 @@ static int eventfd_release(struct inode *inode, struct file *file)
 
 	wake_up_poll(&ctx->wqh, EPOLLHUP);
 	eventfd_ctx_put(ctx);
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_EVENTFD, 1);
+#endif
 	return 0;
 }
 

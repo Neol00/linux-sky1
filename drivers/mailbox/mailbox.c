@@ -277,6 +277,43 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 }
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
+static struct of_phandle_args *to_of_phandle_args(struct fwnode_reference_args *fwnode_args) {
+	struct of_phandle_args of_args;
+	of_args.args_count = fwnode_args->nargs;
+	of_args.np = to_of_node(fwnode_args->fwnode);
+	for (int i = 0; i < fwnode_args->nargs; i++) {
+		of_args.args[i] = fwnode_args->args[i];
+	}
+	memcpy(fwnode_args, &of_args, sizeof(struct of_phandle_args));
+	return (struct of_phandle_args *)fwnode_args;
+}
+
+static struct mbox_chan *mbox_fwnode_parse_chan(struct device *dev, int index)
+{
+	struct fwnode_reference_args fwnode_args;
+	struct mbox_controller *mbox;
+	struct mbox_chan *chan;
+
+	if (fwnode_property_get_reference_args(dev->fwnode, "mboxes",
+				       "#mbox-cells", 1, index, &fwnode_args)) {
+		dev_dbg(dev, "%s: can't parse \"mboxes\" property\n", __func__);
+		return ERR_PTR(-ENODEV);
+	}
+
+	chan = ERR_PTR(-EPROBE_DEFER);
+	list_for_each_entry(mbox, &mbox_cons, node)
+		if (mbox->dev->fwnode == fwnode_args.fwnode) {
+			if (mbox->dev->of_node && mbox->of_xlate)
+				chan = mbox->of_xlate(mbox, to_of_phandle_args(&fwnode_args));
+			else
+				chan = mbox->fwnode_xlate(mbox, &fwnode_args);
+			break;
+		}
+
+	fwnode_handle_put(fwnode_args.fwnode);
+	return chan;
+}
+
 /**
  * mbox_flush - flush a mailbox channel
  * @chan: mailbox channel to flush

@@ -39,6 +39,13 @@
 #include <asm/mmu.h>
 #include <asm/sysreg.h>
 
+#ifdef CONFIG_ARCH_CIX
+/*
+ * Only Hunter cpu support spe feature, so we only set
+ * cpumask bit [0] and [5,11] to spe pmu supported cpus.
+ */
+#define SKY1_HUNTER_CPU_MASK	0xFE1
+#endif
 /*
  * Cache if the event is allowed to trace Context information.
  * This allows us to perform the check, i.e, perf_allow_kernel(),

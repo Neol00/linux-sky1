@@ -169,3 +169,6 @@ obj-$(CONFIG_VIDEO_VP27SMPX) += vp27smpx.o
 obj-$(CONFIG_VIDEO_VPX3220) += vpx3220.o
 obj-$(CONFIG_VIDEO_WM8739) += wm8739.o
 obj-$(CONFIG_VIDEO_WM8775) += wm8775.o
+
+obj-$(CONFIG_SDR_MAX2175) += max2175.o
+obj-$(CONFIG_VIDEO_LT7911UXC)	+= cix/lt7911uxc/

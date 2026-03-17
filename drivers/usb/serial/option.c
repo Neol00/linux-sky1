@@ -92,6 +92,21 @@ static void option_instat_callback(struct urb *urb);
 
 #define NOVATELWIRELESS_VENDOR_ID		0x1410
 
+/* add for meig modem supported {*/
+#define MEIG_VENDOR_ID				0x2DEE
+#define MEIG_QCM_VENDOR_ID			0x05C6
+#define MEIG_QCM_PRODUCT_Q			0xF601
+#define MEIG_PRODUCT_Q				0x4D22
+#define MEIG_PRODUCT_Q_ECM			0x4D23
+#define MEIG_PRODUCT_Q_RNDIS			0x4D38
+#define MEIG_PRODUCT_H				0x4D20
+#define MEIG_PRODUCT_U_ECM			0x4D50
+#define MEIG_PRODUCT_U_RNDIS			0x4D51
+#define MEIG_PRODUCT_U_NCM			0x4D52
+#define MEIG_PRODUCT_A_RNDIS			0x4D57
+#define MEIG_PRODUCT_A_ECM			0x4D58
+/* add for meig modem supported }*/
+
 /* YISO PRODUCTS */
 
 #define YISO_VENDOR_ID				0x0EAB
@@ -692,6 +707,40 @@ static const struct usb_device_id option_ids[] = {
 	  .driver_info = RSVD(1) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_K4605, 0xff, 0xff, 0xff),
 	  .driver_info = RSVD(1) | RSVD(2) },
+
+	/* add for meig modem supported {*/
+	//H series
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x03, 0x03) }, //3g app
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x03, 0x13) }, //app
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x03, 0x01) }, //modem
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x03, 0x12) }, //at
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x03, 0x14) }, //gprs
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x02, 0x03) }, //3g app
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x02, 0x13) }, //app
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x02, 0x01) }, //modem
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x02, 0x12) }, //at
+	{ USB_VENDOR_AND_INTERFACE_INFO(MEIG_VENDOR_ID, 0xff, 0x02, 0x14) }, //gprs
+
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_Q),
+	  .driver_info = RSVD(4) | RSVD(5) | RSVD(6) | RSVD(7) },
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_Q_ECM),
+	  .driver_info = RSVD(4) | RSVD(5) | RSVD(6) | RSVD(7)},
+	{ USB_DEVICE(MEIG_QCM_VENDOR_ID, MEIG_QCM_PRODUCT_Q),
+	  .driver_info = RSVD(4) | RSVD(5) | RSVD(6) | RSVD(7)},
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_Q_RNDIS),
+	  .driver_info = RSVD(0) | RSVD(1) | RSVD(6) | RSVD(7) | RSVD(8) | RSVD(9)},
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_U_RNDIS),
+	  .driver_info = RSVD(0) | RSVD(1) | RSVD(6) | RSVD(7) | RSVD(8) | RSVD(9)},
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_U_ECM),
+	  .driver_info = RSVD(0) | RSVD(1) | RSVD(6) | RSVD(7) | RSVD(8) | RSVD(9)},
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_U_NCM),
+	  .driver_info = RSVD(0) | RSVD(1) | RSVD(6) | RSVD(7) | RSVD(8) | RSVD(9)},
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_A_RNDIS),
+	  .driver_info = RSVD(0)|RSVD(1) | RSVD(6) | RSVD(7) | RSVD(8) },
+	{ USB_DEVICE(MEIG_VENDOR_ID, MEIG_PRODUCT_A_ECM),
+	  .driver_info = RSVD(0)|RSVD(1)| RSVD(6) | RSVD(7) | RSVD(8) },
+	/* add for meig modem supported }*/
+
 	{ USB_VENDOR_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, 0xff, 0xff, 0xff) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, 0xff, 0x01, 0x01) },
 	{ USB_VENDOR_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, 0xff, 0x01, 0x02) },

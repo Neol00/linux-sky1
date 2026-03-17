@@ -1998,6 +1998,11 @@ int rproc_shutdown(struct rproc *rproc)
 		goto out;
 	}
 
+	if (rproc->state != RPROC_RUNNING) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	/* if the remote proc is still needed, bail out */
 	if (!atomic_dec_and_test(&rproc->power))
 		goto out;

@@ -3,6 +3,7 @@
 // Author: Jerry Zhu <Jerry.Zhu@cixtech.com>
 // Author: Gary Yang <gary.yang@cixtech.com>
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/init.h>
@@ -21,6 +22,7 @@
 
 #include "../core.h"
 #include "../pinconf.h"
+#include "../pinctrl-acpi.h"
 #include "../pinctrl-utils.h"
 #include "../pinmux.h"
 #include "pinctrl-sky1.h"
@@ -237,11 +239,98 @@ static void sky1_dt_free_map(struct pinctrl_dev *pctldev,
 	kfree(map);
 }
 
+static int sky1_acpi_node_to_map(struct pinctrl_dev *pctldev,
+				struct pinctrl_acpi_resource *info,
+				struct pinctrl_map **map,
+				unsigned *num_maps_out)
+{
+	struct sky1_pinctrl *spctl = pinctrl_dev_get_drvdata(pctldev);
+	struct pinctrl_map *new_map;
+	struct pinctrl_map_configs *map_config;
+	struct pinctrl_acpi_config_node *config_node;
+	int fun_selector, grp_selector;
+	int ret = 0;
+
+	new_map = kzalloc(sizeof(struct pinctrl_map), GFP_KERNEL);
+	if (!new_map)
+		return -ENOMEM;
+
+	switch (info->type) {
+	case PINCTRL_ACPI_PIN_FUNCTION:
+		fun_selector = info->function.function_number;
+		if (fun_selector >= ARRAY_SIZE(sky1_gpio_functions)) {
+			ret = -EINVAL;
+			goto out_free;
+		}
+		new_map->type = PIN_MAP_TYPE_MUX_GROUP;
+		new_map->data.mux.function = sky1_gpio_functions[fun_selector];
+		/* Find matching group by pin */
+		if (info->function.npins > 0) {
+			struct sky1_pinctrl_group *grp;
+
+			grp = sky1_pctrl_find_group_by_pin(spctl,
+							   info->function.pins[0]);
+			new_map->data.mux.group = grp ? grp->name : NULL;
+		}
+		break;
+	case PINCTRL_ACPI_PIN_CONFIG:
+		map_config = &new_map->data.configs;
+		new_map->type = PIN_MAP_TYPE_CONFIGS_PIN;
+		map_config->group_or_pin = pin_get_name(pctldev,
+							info->config.pin);
+		map_config->configs = devm_kcalloc(pctldev->dev,
+						   info->config.nconfigs,
+						   sizeof(unsigned long),
+						   GFP_KERNEL);
+		if (!map_config->configs) {
+			ret = -ENOMEM;
+			goto out_free;
+		}
+		map_config->num_configs = 0;
+		list_for_each_entry(config_node, info->config.configs, node)
+			map_config->configs[map_config->num_configs++] =
+				config_node->config;
+		break;
+	case PINCTRL_ACPI_PIN_GRP_FUNCTION:
+		fun_selector = info->function.function_number;
+		grp_selector = info->function.group_number;
+		if (fun_selector >= ARRAY_SIZE(sky1_gpio_functions) ||
+		    grp_selector >= spctl->info->npins) {
+			ret = -EINVAL;
+			goto out_free;
+		}
+		new_map->type = PIN_MAP_TYPE_MUX_GROUP;
+		new_map->data.mux.function = sky1_gpio_functions[fun_selector];
+		new_map->data.mux.group = spctl->grp_names[grp_selector];
+		break;
+	default:
+		dev_warn(pctldev->dev, "Unsupported ACPI pin type %d\n",
+			 info->type);
+		ret = -EINVAL;
+		goto out_free;
+	}
+
+	*map = new_map;
+	*num_maps_out = 1;
+	return 0;
+
+out_free:
+	kfree(new_map);
+	return ret;
+}
+
+static void sky1_acpi_free_map(struct pinctrl_dev *pctldev,
+			       struct pinctrl_map *map,
+			       unsigned num_maps)
+{
+	kfree(map);
+}
+
 static int sky1_pctrl_get_groups_count(struct pinctrl_dev *pctldev)
 {
 	struct sky1_pinctrl *spctl = pinctrl_dev_get_drvdata(pctldev);
 
-	return spctl->info->npins;
+	return spctl->group_index;
 }
 
 static const char *sky1_pctrl_get_group_name(struct pinctrl_dev *pctldev,
@@ -274,6 +363,8 @@ static void sky1_pin_dbg_show(struct pinctrl_dev *pctldev, struct seq_file *s,
 static const struct pinctrl_ops sky1_pctrl_ops = {
 	.dt_node_to_map = sky1_pctrl_dt_node_to_map,
 	.dt_free_map = sky1_dt_free_map,
+	.acpi_node_to_map = sky1_acpi_node_to_map,
+	.acpi_free_map = sky1_acpi_free_map,
 	.get_groups_count = sky1_pctrl_get_groups_count,
 	.get_group_name = sky1_pctrl_get_group_name,
 	.get_group_pins = sky1_pctrl_get_group_pins,
@@ -287,9 +378,14 @@ static int sky1_pmx_set_one_pin(struct sky1_pinctrl *spctl,
 	void __iomem *pin_reg;
 
 	pin_reg = spctl->base + pin * SKY1_PIN_SIZE;
-	reg_val = readl(pin_reg);
-	reg_val &= ~SKY1_MUX_MASK;
-	reg_val |= muxval << SKY1_MUX_SHIFT;
+	if (!has_acpi_companion(spctl->dev)) {
+		reg_val = readl(pin_reg);
+		reg_val &= ~SKY1_MUX_MASK;
+		reg_val |= muxval << SKY1_MUX_SHIFT;
+	} else {
+		/* On ACPI, write the full mux+config value */
+		reg_val = muxval << SKY1_MUX_SHIFT;
+	}
 	writel(reg_val, pin_reg);
 
 	dev_dbg(spctl->dev, "write: offset 0x%x val 0x%x\n",
@@ -334,10 +430,9 @@ static int sky1_pmx_get_func_groups(struct pinctrl_dev *pctldev,
 				     unsigned int * const num_groups)
 {
 	struct sky1_pinctrl *spctl = pinctrl_dev_get_drvdata(pctldev);
-	const struct sky1_pinctrl_soc_info *info = spctl->info;
 
 	*groups = spctl->grp_names;
-	*num_groups = info->npins;
+	*num_groups = spctl->group_index;
 
 	return 0;
 }
@@ -500,6 +595,94 @@ static int sky1_pctrl_build_state(struct platform_device *pdev)
 		spctl->grp_names[i] = pin->pin.name;
 	}
 
+	spctl->group_index = info->npins;
+	return 0;
+}
+
+static void
+sky1_free_acpi_group_desc(struct pinctrl_acpi_group_desc *acpi_grp_desc)
+{
+	if (!acpi_grp_desc)
+		return;
+
+	kfree(acpi_grp_desc->vendor_data);
+	kfree(acpi_grp_desc->pins);
+	kfree(acpi_grp_desc->name);
+	kfree(acpi_grp_desc);
+}
+
+static int sky1_pinctrl_probe_acpi(struct platform_device *pdev,
+				   struct sky1_pinctrl *spctl)
+{
+	struct pinctrl_acpi_group_desc *acpi_grp, *temp;
+	struct acpi_device *acpi_dev = ACPI_COMPANION(&pdev->dev);
+	struct list_head pinctrl_group_list;
+	int ret, num_acpi_groups = 0, i = 0;
+	struct sky1_pinctrl_group *new_groups;
+	const char **new_grp_names;
+	int base_groups = spctl->info->npins;
+
+	if (!acpi_dev)
+		return 0;
+
+	INIT_LIST_HEAD(&pinctrl_group_list);
+	ret = pinctrl_acpi_get_pin_groups(acpi_dev, &pinctrl_group_list);
+	if (ret)
+		return ret;
+
+	list_for_each_entry(acpi_grp, &pinctrl_group_list, list)
+		num_acpi_groups++;
+
+	if (!num_acpi_groups)
+		return 0;
+
+	/* Extend groups and grp_names arrays to include ACPI groups */
+	new_groups = devm_kcalloc(&pdev->dev, base_groups + num_acpi_groups,
+				  sizeof(*new_groups), GFP_KERNEL);
+	new_grp_names = devm_kcalloc(&pdev->dev, base_groups + num_acpi_groups,
+				     sizeof(*new_grp_names), GFP_KERNEL);
+	if (!new_groups || !new_grp_names)
+		return -ENOMEM;
+
+	/* Copy existing per-pin groups */
+	memcpy(new_groups, spctl->groups,
+	       base_groups * sizeof(*new_groups));
+	memcpy(new_grp_names, spctl->grp_names,
+	       base_groups * sizeof(*new_grp_names));
+
+	/* Parse ACPI groups and append them */
+	i = 0;
+	list_for_each_entry_safe(acpi_grp, temp, &pinctrl_group_list, list) {
+		struct sky1_pinctrl_group *grp = &new_groups[base_groups + i];
+
+		grp->name = devm_kstrdup(&pdev->dev, acpi_grp->name,
+					 GFP_KERNEL);
+		if (acpi_grp->num_pins > 0) {
+			grp->pin = acpi_grp->pins[0];
+			/* Store full config from vendor data if available */
+			if (acpi_grp->vendor_data) {
+				__be16 *vendor = (__be16 *)acpi_grp->vendor_data;
+				unsigned int offset = be16_to_cpu(vendor[0]);
+				unsigned int config = be16_to_cpu(vendor[1]);
+
+				spctl->pin_regs[grp->pin] = offset;
+				grp->config = config;
+			}
+		}
+		new_grp_names[base_groups + i] = grp->name;
+
+		dev_dbg(&pdev->dev, "ACPI group[%d]: %s pin=%d\n",
+			base_groups + i, grp->name, grp->pin);
+
+		list_del(&acpi_grp->list);
+		sky1_free_acpi_group_desc(acpi_grp);
+		i++;
+	}
+
+	spctl->groups = new_groups;
+	spctl->grp_names = new_grp_names;
+	spctl->group_index += num_acpi_groups;
+
 	return 0;
 }
 
@@ -523,6 +706,14 @@ int sky1_base_pinctrl_probe(struct platform_device *pdev,
 
 	spctl->info = info;
 	platform_set_drvdata(pdev, spctl);
+
+	spctl->pin_regs = devm_kmalloc_array(&pdev->dev, info->npins,
+					     sizeof(*spctl->pin_regs),
+					     GFP_KERNEL);
+	if (!spctl->pin_regs)
+		return -ENOMEM;
+	for (i = 0; i < info->npins; i++)
+		spctl->pin_regs[i] = -1;
 
 	spctl->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(spctl->base))
@@ -560,19 +751,14 @@ int sky1_base_pinctrl_probe(struct platform_device *pdev,
 		return ret;
 	}
 
-	/*
-	 * The SKY1 SoC has two pin controllers: one for normal working state
-	 * and one for sleep state. Since one controller only has working
-	 * states and the other only sleep states, it will seem to the
-	 * controller is always in the first configured state, so no
-	 * transitions between default->sleep->default are detected and no
-	 * new pin states are applied when we go in and out of sleep state.
-	 *
-	 * To counter this, provide dummies, so that the sleep-only pin
-	 * controller still get some default states, and the working state pin
-	 * controller get some sleep states, so that state transitions occur
-	 * and we re-configure pins for default and sleep states.
-	 */
+	/* Parse ACPI pin groups if running on ACPI */
+	if (has_acpi_companion(&pdev->dev)) {
+		ret = sky1_pinctrl_probe_acpi(pdev, spctl);
+		if (ret)
+			dev_warn(&pdev->dev,
+				 "ACPI pin group parsing failed: %d\n", ret);
+	}
+
 	pinctrl_provide_dummies();
 
 	dev_dbg(&pdev->dev, "initialized SKY1 pinctrl driver\n");
