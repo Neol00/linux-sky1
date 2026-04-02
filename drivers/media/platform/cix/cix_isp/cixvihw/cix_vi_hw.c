@@ -861,7 +861,7 @@ static int cix_vi_hw_probe(struct platform_device *pdev)
 			LOG(LOG_ERR, "Failed to get IRQ resource");
 
 		ret = devm_request_irq(dev, irq0, mipi_csi2_irq_handler,
-					   IRQF_ONESHOT | IRQF_SHARED,
+					   IRQF_SHARED,
 					   dev_name(dev),
 					   cix_vi_hw_info->ahb_csi_base_addrs[i]);
 		if (ret)
@@ -872,7 +872,7 @@ static int cix_vi_hw_probe(struct platform_device *pdev)
 			LOG(LOG_ERR, "Failed to get IRQ error resource");
 
 		ret = devm_request_irq(dev, irq1, mipi_csi2_err_irq_handler,
-					   IRQF_ONESHOT | IRQF_SHARED,
+					   IRQF_SHARED,
 					   dev_name(dev),
 					   cix_vi_hw_info->ahb_csi_base_addrs[i]);
 		if (ret)

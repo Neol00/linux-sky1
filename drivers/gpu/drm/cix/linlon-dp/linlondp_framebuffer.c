@@ -246,7 +246,7 @@ dma_addr_t linlondp_fb_get_pixel_addr(struct linlondp_fb *kfb, int x, int y,
 
 	if (plane >= fb->format->num_planes) {
 		pr_debug("Out of max plane num.\n");
-		return -EINVAL;
+		return 0;
 	}
 
 	obj = drm_fb_dma_get_gem_obj(fb, plane);

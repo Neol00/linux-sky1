@@ -1995,13 +1995,13 @@ void dma350_ch_cmd(void __iomem *addr, uint32_t cmd)
 }
 
 static inline
-void dma350_ch_enable_intr(void __iomem *addr, uint32_t intr)
+void dma350_ch_enable_intr(void __iomem *addr, enum dma350_ch_intr_t intr)
 {
 	writel(readl(addr) | intr, addr);
 }
 
 static inline
-void dma350_ch_disable_intr(void __iomem *addr, uint32_t intr)
+void dma350_ch_disable_intr(void __iomem *addr, enum dma350_ch_intr_t intr)
 {
 	writel(readl(addr) & (~intr), addr);
 }

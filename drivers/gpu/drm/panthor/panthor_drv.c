@@ -1852,3 +1852,7 @@ module_exit(panthor_exit);
 MODULE_AUTHOR("Panthor Project Developers");
 MODULE_DESCRIPTION("Panthor DRM Driver");
 MODULE_LICENSE("Dual MIT/GPL");
+/* When mali_kbase is installed, let it load first so it binds CIXH5000.
+ * If mali_kbase is not installed, modprobe ignores the softdep and
+ * panthor binds instead. */
+MODULE_SOFTDEP("pre: mali_kbase");

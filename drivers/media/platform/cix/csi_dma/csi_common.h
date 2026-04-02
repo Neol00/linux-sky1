@@ -442,9 +442,18 @@ struct csi2rx_priv {
 	struct device		*dev;
 	struct platform_device	*pdev;
 	struct mipi_csi2_hw	*mipi_csi2_hw;
+	unsigned int		count;
 	struct mutex		lock;
 	spinlock_t		slock;
 	void __iomem		*base;
+	struct clk		*sys_clk;
+	struct clk		*p_clk;
+	struct clk		*pixel_clk[CSI2RX_STREAMS_MAX];
+	struct reset_control	*sys_rst;
+	struct reset_control	*p_rst;
+	struct reset_control	*pixel_rst[CSI2RX_STREAMS_MAX];
+	struct reset_control	*csi_reset;
+	struct phy		*dphy;
 	struct v4l2_async_notifier	notifier;
 	struct media_pad		pads[CSI2RX_PAD_MAX];
 	v4l2_async_subdev	asd;
@@ -452,9 +461,13 @@ struct csi2rx_priv {
 	struct v4l2_mbus_framefmt	format;
 	u8	id;
 	u8	num_lanes;
+	u8	max_lanes;
+	u8	max_streams;
+	bool	has_internal_dphy;
 	int	source_pad;
 	u16	sys_clk_freq;
 	u64	data_rate_Mbit;
+	u32	stream_on;
 };
 
 enum csi_dma_out_fmt {

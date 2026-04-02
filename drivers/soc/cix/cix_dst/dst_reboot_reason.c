@@ -131,7 +131,7 @@ void plat_pm_system_reset_comm(const char *cmd)
  * 7	0x218	POWER BUTTON OVERRID       HW
  * 8	0x218	CSU_SE WDT 2ND TIME-OUT    HW
  */
-void print_hw_reboot_reason(u32 value)
+static void print_hw_reboot_reason(u32 value)
 {
 	char *Desc = NULL;
 

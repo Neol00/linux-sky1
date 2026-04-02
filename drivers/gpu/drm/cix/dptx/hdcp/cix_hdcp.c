@@ -38,6 +38,8 @@ int cix_hdcp_hpd_event_process(struct cix_hdcp *hdcp, bool plugged)
 	}
 
 	e = kmalloc(sizeof(struct hdcp_event), GFP_KERNEL);
+	if (!e)
+		return -ENOMEM;
 
 	if (plugged == true) {
 		e->event = EV2_TX_RX_CONNECT;
@@ -65,6 +67,8 @@ int cix_hdcp_timer_process(struct cix_hdcp *hdcp)
 	hdcp->timer_in_use = false;
 
 	e = kmalloc(sizeof(struct hdcp_event), GFP_KERNEL);
+	if (!e)
+		return -ENOMEM;
 	e->event = EV2_TX_TIMER;
 
 	dev_info(hdcp->aux->dev, "report event timer\n");
@@ -84,6 +88,8 @@ int cix_hdcp_cp_irq_process(struct cix_hdcp *hdcp, u8 rx_status)
 
 	if (rx_status & 0x1f) {
 		e = kmalloc(sizeof(struct hdcp_event), GFP_KERNEL);
+		if (!e)
+			return 0;
 		if (rx_status & 0x1) {
 			e->event = EV2_TX_READY;
 			dev_info(hdcp->aux->dev, "report event EV2_TX_READY\n");
@@ -142,7 +148,7 @@ static int cix_hdcp_open(struct inode *inode, struct file *filp)
 		dev_info(hdcp->aux->dev, "succeed to open hdcp file\n");
 		ret = 0;
 	} else {
-		dev_info(hdcp->aux->dev, "failed to open hdcp file\n");
+		pr_info("failed to open hdcp file\n");
 		ret = -EINVAL;
 	}
 

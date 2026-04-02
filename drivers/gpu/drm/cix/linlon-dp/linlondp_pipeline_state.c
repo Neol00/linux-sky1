@@ -1245,7 +1245,7 @@ linlondp_split_sbs_master_data_flow(struct linlondp_crtc_state *kcrtc_st,
 		u32 src_y = master->in_y;
 		u32 src_w = master->in_w;
 		u32 src_h = master->in_h;
-		u32 master_valid_w, slave_valid_w;
+		u32 master_valid_w __maybe_unused, slave_valid_w __maybe_unused;
 		u32 h_scaling_ratio = 0;
 
 #ifdef SBS_NO_OVERLAP_SCALING

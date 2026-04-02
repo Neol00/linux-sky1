@@ -61,14 +61,15 @@ static int cix_sky1_se_config_init(void)
 {
 
         cix_sky1_root = proc_mkdir("cix_sky1", NULL);
-        if (IS_ERR(cix_sky1_root)){
+        if (!cix_sky1_root){
                 pr_err("failed to make cix_sky1 dir\n");
                 return -1;
         }
 
         se_config_proc = proc_create(SE_CONFIG_NODE, 0, cix_sky1_root, &hw_auto_clk_gating_fops);
-        if (IS_ERR(se_config_proc)){
+        if (!se_config_proc){
                 pr_err("failed to make %s", SE_CONFIG_NODE);
+                remove_proc_entry("cix_sky1", NULL);
                 return -1;
         }
         pr_info("%s Created %s\n", __func__, SE_CONFIG_NODE);

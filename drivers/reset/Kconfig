@@ -402,12 +402,6 @@ config RESET_SKY1
 	help
 	  This enables the reset controller driver for Sky1 SoCs.
 
-config RESET_FCH_SKY1
-	tristate "Sky1 FCH Reset Driver"
-	depends on ARCH_CIX
-	help
-	  This enables the fch reset controller driver for Sky1 SoCs.
-
 config RESET_SKY1_AUDSS
 	tristate "Sky1 Audss Reset Driver"
 	depends on ARCH_CIX

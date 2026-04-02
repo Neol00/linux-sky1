@@ -289,7 +289,7 @@ static int armcb_v4l2_fh_release(struct file *file)
 	LOG(LOG_DEBUG, "isp_v4l2 close: ctx_id: %d, called for sid:%d.",
 		dev->ctx_id, sp->stream_id);
 	if (sp) {
-		v4l2_fh_del(&sp->fh);
+		v4l2_fh_del(&sp->fh, file);
 		v4l2_fh_exit(&sp->fh);
 	}
 	kfree(sp);
@@ -346,7 +346,7 @@ static int armcb_v4l2_fh_open(struct file *file)
 
 	file->private_data = &sp->fh;
 	v4l2_fh_init(&sp->fh, &dev->vid_cap_dev);
-	v4l2_fh_add(&sp->fh);
+	v4l2_fh_add(&sp->fh, file);
 
 	LOG(LOG_DEBUG, "open v4l2 fp success");
 	return 0;

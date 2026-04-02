@@ -21,6 +21,11 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
+#include "page_pool.h"
+
+static struct dma_heap *sys_heap;
+static struct dma_heap *sys_uncached_heap;
+
 struct system_heap_buffer {
 	struct dma_heap *heap;
 	struct list_head attachments;
@@ -35,9 +40,11 @@ struct system_heap_buffer {
 
 struct dma_heap_attachment {
 	struct device *dev;
-	struct sg_table table;
+	struct sg_table *table;
 	struct list_head list;
 	bool mapped;
+
+	bool uncached;
 };
 
 #define LOW_ORDER_GFP (GFP_HIGHUSER | __GFP_ZERO)
@@ -53,23 +60,31 @@ static gfp_t order_flags[] = {HIGH_ORDER_GFP, HIGH_ORDER_GFP, LOW_ORDER_GFP};
  */
 static const unsigned int orders[] = {8, 4, 0};
 #define NUM_ORDERS ARRAY_SIZE(orders)
+struct dmabuf_page_pool *pools[NUM_ORDERS];
 
-static int dup_sg_table(struct sg_table *from, struct sg_table *to)
+static struct sg_table *dup_sg_table(struct sg_table *table)
 {
-	struct scatterlist *sg, *new_sg;
+	struct sg_table *new_table;
 	int ret, i;
+	struct scatterlist *sg, *new_sg;
 
-	ret = sg_alloc_table(to, from->orig_nents, GFP_KERNEL);
-	if (ret)
-		return ret;
+	new_table = kzalloc(sizeof(*new_table), GFP_KERNEL);
+	if (!new_table)
+		return ERR_PTR(-ENOMEM);
 
-	new_sg = to->sgl;
-	for_each_sgtable_sg(from, sg, i) {
+	ret = sg_alloc_table(new_table, table->orig_nents, GFP_KERNEL);
+	if (ret) {
+		kfree(new_table);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	new_sg = new_table->sgl;
+	for_each_sgtable_sg(table, sg, i) {
 		sg_set_page(new_sg, sg_page(sg), sg->length, sg->offset);
 		new_sg = sg_next(new_sg);
 	}
 
-	return 0;
+	return new_table;
 }
 
 static int system_heap_attach(struct dma_buf *dmabuf,
@@ -77,18 +92,19 @@ static int system_heap_attach(struct dma_buf *dmabuf,
 {
 	struct system_heap_buffer *buffer = dmabuf->priv;
 	struct dma_heap_attachment *a;
-	int ret;
+	struct sg_table *table;
 
-	a = kzalloc_obj(*a);
+	a = kzalloc(sizeof(*a), GFP_KERNEL);
 	if (!a)
 		return -ENOMEM;
 
-	ret = dup_sg_table(&buffer->sg_table, &a->table);
-	if (ret) {
+	table = dup_sg_table(&buffer->sg_table);
+	if (IS_ERR(table)) {
 		kfree(a);
-		return ret;
+		return -ENOMEM;
 	}
 
+	a->table = table;
 	a->dev = attachment->dev;
 	INIT_LIST_HEAD(&a->list);
 	a->mapped = false;
@@ -112,7 +128,8 @@ static void system_heap_detach(struct dma_buf *dmabuf,
 	list_del(&a->list);
 	mutex_unlock(&buffer->lock);
 
-	sg_free_table(&a->table);
+	sg_free_table(a->table);
+	kfree(a->table);
 	kfree(a);
 }
 
@@ -120,10 +137,14 @@ static struct sg_table *system_heap_map_dma_buf(struct dma_buf_attachment *attac
 						enum dma_data_direction direction)
 {
 	struct dma_heap_attachment *a = attachment->priv;
-	struct sg_table *table = &a->table;
+	struct sg_table *table = a->table;
+	int attr = attachment->dma_map_attrs;
 	int ret;
 
-	ret = dma_map_sgtable(attachment->dev, table, direction, 0);
+	if (a->uncached)
+		attr |= DMA_ATTR_SKIP_CPU_SYNC;
+
+	ret = dma_map_sgtable(attachment->dev, table, direction, attr);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -155,10 +176,12 @@ static int system_heap_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 	if (buffer->vmap_cnt)
 		invalidate_kernel_vmap_range(buffer->vaddr, buffer->len);
 
-	list_for_each_entry(a, &buffer->attachments, list) {
-		if (!a->mapped)
-			continue;
-		dma_sync_sgtable_for_cpu(a->dev, &a->table, direction);
+	if (!buffer->uncached) {
+		list_for_each_entry(a, &buffer->attachments, list) {
+			if (!a->mapped)
+				continue;
+			dma_sync_sgtable_for_cpu(a->dev, a->table, direction);
+		}
 	}
 	mutex_unlock(&buffer->lock);
 
@@ -176,10 +199,12 @@ static int system_heap_dma_buf_end_cpu_access(struct dma_buf *dmabuf,
 	if (buffer->vmap_cnt)
 		flush_kernel_vmap_range(buffer->vaddr, buffer->len);
 
-	list_for_each_entry(a, &buffer->attachments, list) {
-		if (!a->mapped)
-			continue;
-		dma_sync_sgtable_for_device(a->dev, &a->table, direction);
+	if (!buffer->uncached) {
+		list_for_each_entry(a, &buffer->attachments, list) {
+			if (!a->mapped)
+				continue;
+			dma_sync_sgtable_for_device(a->dev, a->table, direction);
+		}
 	}
 	mutex_unlock(&buffer->lock);
 
@@ -191,35 +216,23 @@ static int system_heap_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
 	struct system_heap_buffer *buffer = dmabuf->priv;
 	struct sg_table *table = &buffer->sg_table;
 	unsigned long addr = vma->vm_start;
-	unsigned long pgoff = vma->vm_pgoff;
-	struct scatterlist *sg;
-	int i, ret;
+	struct sg_page_iter piter;
+	int ret;
 
-	for_each_sgtable_sg(table, sg, i) {
-		unsigned long n = sg->length >> PAGE_SHIFT;
+	if (buffer->uncached)
+		vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 
-		if (pgoff < n)
-			break;
-		pgoff -= n;
-	}
+	for_each_sgtable_page(table, &piter, vma->vm_pgoff) {
+		struct page *page = sg_page_iter_page(&piter);
 
-	for (; sg && addr < vma->vm_end; sg = sg_next(sg)) {
-		unsigned long n = (sg->length >> PAGE_SHIFT) - pgoff;
-		struct page *page = sg_page(sg) + pgoff;
-		unsigned long size = n << PAGE_SHIFT;
-
-		if (addr + size > vma->vm_end)
-			size = vma->vm_end - addr;
-
-		ret = remap_pfn_range(vma, addr, page_to_pfn(page),
-				size, vma->vm_page_prot);
+		ret = remap_pfn_range(vma, addr, page_to_pfn(page), PAGE_SIZE,
+				      vma->vm_page_prot);
 		if (ret)
 			return ret;
-
-		addr += size;
-		pgoff = 0;
+		addr += PAGE_SIZE;
+		if (addr >= vma->vm_end)
+			return 0;
 	}
-
 	return 0;
 }
 
@@ -354,17 +367,13 @@ static struct page *alloc_largest_available(unsigned long size,
 {
 	struct page *page;
 	int i;
-	gfp_t flags;
 
 	for (i = 0; i < NUM_ORDERS; i++) {
 		if (size <  (PAGE_SIZE << orders[i]))
 			continue;
 		if (max_order < orders[i])
 			continue;
-		flags = order_flags[i];
-		if (mem_accounting)
-			flags |= __GFP_ACCOUNT;
-		page = alloc_pages(flags, orders[i]);
+		page = dmabuf_page_pool_alloc(pools[i]);
 		if (!page)
 			continue;
 		return page;
@@ -372,10 +381,11 @@ static struct page *alloc_largest_available(unsigned long size,
 	return NULL;
 }
 
-static struct dma_buf *system_heap_allocate(struct dma_heap *heap,
-					    unsigned long len,
-					    u32 fd_flags,
-					    u64 heap_flags)
+static struct dma_buf *system_heap_do_allocate(struct dma_heap *heap,
+					       unsigned long len,
+					       u32 fd_flags,
+					       u64 heap_flags,
+					       bool uncached)
 {
 	struct system_heap_buffer *buffer;
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
@@ -388,7 +398,7 @@ static struct dma_buf *system_heap_allocate(struct dma_heap *heap,
 	struct page *page, *tmp_page;
 	int i, ret = -ENOMEM;
 
-	buffer = kzalloc_obj(*buffer);
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return ERR_PTR(-ENOMEM);
 
@@ -471,14 +481,57 @@ free_buffer:
 	return ERR_PTR(ret);
 }
 
+static struct dma_buf *system_heap_allocate(struct dma_heap *heap,
+					    unsigned long len,
+					    u32 fd_flags,
+					    u64 heap_flags)
+{
+	return system_heap_do_allocate(heap, len, fd_flags, heap_flags, false);
+}
+
 static const struct dma_heap_ops system_heap_ops = {
 	.allocate = system_heap_allocate,
+};
+
+static struct dma_buf *system_uncached_heap_allocate(struct dma_heap *heap,
+						     unsigned long len,
+						     u32 fd_flags,
+						     u64 heap_flags)
+{
+	return system_heap_do_allocate(heap, len, fd_flags, heap_flags, true);
+}
+
+/* Dummy function to be used until we can call coerce_mask_and_coherent */
+static struct dma_buf *system_uncached_heap_not_initialized(struct dma_heap *heap,
+							    unsigned long len,
+							    u32 fd_flags,
+							    u64 heap_flags)
+{
+	return ERR_PTR(-EBUSY);
+}
+
+static struct dma_heap_ops system_uncached_heap_ops = {
+	/* After system_heap_create is complete, we will swap this */
+	.allocate = system_uncached_heap_not_initialized,
 };
 
 static int __init system_heap_create(void)
 {
 	struct dma_heap_export_info exp_info;
-	struct dma_heap *sys_heap;
+	int i;
+
+	for (i = 0; i < NUM_ORDERS; i++) {
+		pools[i] = dmabuf_page_pool_create(order_flags[i], orders[i]);
+
+		if (IS_ERR(pools[i])) {
+			int j;
+
+			pr_err("%s: page pool creation failed!\n", __func__);
+			for (j = 0; j < i; j++)
+				dmabuf_page_pool_destroy(pools[j]);
+			return PTR_ERR(pools[i]);
+		}
+	}
 
 	exp_info.name = "system";
 	exp_info.ops = &system_heap_ops;
@@ -504,4 +557,5 @@ static int __init system_heap_create(void)
 }
 module_init(system_heap_create);
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS(DMA_BUF);
+MODULE_IMPORT_NS("DMA_BUF");
+MODULE_IMPORT_NS("DMA_BUF_HEAP");

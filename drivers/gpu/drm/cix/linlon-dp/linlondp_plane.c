@@ -23,7 +23,6 @@ static int linlondp_plane_init_data_flow(struct drm_plane_state *st,
 	struct drm_framebuffer *fb = st->fb;
 	const struct linlondp_format_caps *caps = to_kfb(fb)->format_caps;
 	struct linlondp_pipeline *pipe = kplane->layer->base.pipeline;
-	struct linlondp_dev *mdev = st->plane->dev->dev_private;
 	struct drm_crtc_state *crtc_st;
 	struct drm_display_mode *mode;
 	struct drm_display_mode *adjusted_mode;
@@ -50,6 +49,8 @@ static int linlondp_plane_init_data_flow(struct drm_plane_state *st,
 	dflow->out_h = st->crtc_h;
 
 	crtc_st = drm_atomic_get_new_crtc_state(st->state, st->crtc);
+	if (!crtc_st)
+		return -EINVAL;
 	mode = &crtc_st->mode;
 	adjusted_mode = &crtc_st->adjusted_mode;
 	hdisplay = mode->hdisplay;

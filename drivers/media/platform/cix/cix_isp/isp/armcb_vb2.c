@@ -132,8 +132,6 @@ static struct vb2_ops armcb_vid_cap_qops = {
 	.queue_setup = armcb_vb2_queue_setup,
 	.buf_queue = armcb_vb2_buf_queue,
 	.buf_finish = armcb_vb2_buf_finish,
-	.wait_prepare = vb2_ops_wait_prepare,
-	.wait_finish = vb2_ops_wait_finish,
 };
 
 struct vb2_ops *armcb_vb2_get_q_ops(void)
@@ -160,7 +158,7 @@ int isp_vb2_queue_init(struct vb2_queue *q, struct mutex *mlock,
 	q->ops = armcb_vb2_get_q_ops();
 	q->mem_ops = armcb_vb2_get_q_mem_ops();
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-	q->min_buffers_needed = 1;
+	q->min_queued_buffers = 1;
 	q->lock = mlock;
 	q->dev = dev;
 

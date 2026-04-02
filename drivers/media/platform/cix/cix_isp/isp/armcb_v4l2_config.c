@@ -1551,7 +1551,7 @@ static int armcb_v4l2_config_fop_release(struct file *file)
 		LOG(LOG_DEBUG,
 		    "armcb_fop_release v4l2_event_unsubscribe, ret = %d", ret);
 
-		v4l2_fh_del(fh);
+		v4l2_fh_del(fh, file);
 		v4l2_fh_exit(fh);
 	}
 	LOG(LOG_DEBUG, "-");
@@ -1570,7 +1570,7 @@ static int armcb_v4l2_config_fop_open(struct file *file)
 		return -ENOMEM;
 
 	v4l2_fh_init(fh, vdev);
-	v4l2_fh_add(fh);
+	v4l2_fh_add(fh, file);
 
 	atomic_add(1, &dev->opened);
 	return 0;
@@ -1828,7 +1828,7 @@ static int armcb_v4l2_config_probe(struct platform_device *pdev)
 
 	/* register v4l2_device */
 	snprintf(p_v4l_config_dev->v4l2_dev.name,
-		 V4L2_DEVICE_NAME_SIZE * sizeof(char), "%s", ARMCB_MODULE_NAME);
+		 sizeof(p_v4l_config_dev->v4l2_dev.name), "%s", ARMCB_MODULE_NAME);
 
 	ret = v4l2_device_register(&pdev->dev, &p_v4l_config_dev->v4l2_dev);
 	if (ret) {
@@ -1910,7 +1910,7 @@ static int armcb_v4l2_config_probe(struct platform_device *pdev)
 			       (void *)p_v4l_config_dev);
 #else
 	ret = devm_request_irq(&pdev->dev, isp_irqno, hw_info->isp_isr,
-			       IRQF_ONESHOT | IRQF_SHARED, pdev->name,
+			       IRQF_SHARED, pdev->name,
 			       (void *)p_v4l_config_dev);
 #endif
 	if (ret != 0) {

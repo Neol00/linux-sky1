@@ -163,7 +163,7 @@ static int reset_lookup_handle(acpi_handle handle,
 			devm_kstrdup(dev, el[3].string.pointer, GFP_KERNEL)
 			: NULL;
 
-		if (!lookup->provider || (!lookup->dev_id && !lookup->con_id))
+		if (!lookup->provider || !lookup->dev_id)
 			continue;
 
 		reset_controller_add_lookup(lookup, 1);

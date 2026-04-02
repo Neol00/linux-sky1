@@ -255,7 +255,7 @@ static int dpc_write(struct dpc_register_resource *reg_res, u64 val)
 }
 
 // Derive delivered performance rate for device from delivered performance state
-u64 acpi_dev_perf_current_rate(struct device *dev)
+static u64 __maybe_unused acpi_dev_perf_current_rate(struct device *dev)
 {
 	struct acpi_dev_pstates_ctrl *ctrl;
 	u64 perf_level;
@@ -270,7 +270,7 @@ u64 acpi_dev_perf_current_rate(struct device *dev)
 	return perf_level * ctrl->perf_to_freq_factor;
 }
 
-int acpi_dev_perf_set_state(struct device *dev, unsigned long target_rate)
+static int __maybe_unused acpi_dev_perf_set_state(struct device *dev, unsigned long target_rate)
 {
 	struct acpi_dev_pstates_ctrl *ctrl;
 	unsigned int state;

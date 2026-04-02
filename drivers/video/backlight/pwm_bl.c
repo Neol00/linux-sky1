@@ -17,6 +17,7 @@
 #include <linux/pwm_backlight.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
+#include <linux/acpi.h>
 #include <acpi/video.h>
 
 struct pwm_bl_data {
@@ -607,15 +608,6 @@ static int pwm_backlight_probe(struct platform_device *pdev)
 	backlight_update_status(bl);
 
 	platform_set_drvdata(pdev, bl);
-
-	if (has_acpi_companion(&pdev->dev)) {
-		acpi_status status = acpi_install_notify_handler(
-			to_acpi_device_node(pdev->dev.fwnode)->handle,
-			ACPI_DEVICE_NOTIFY, acpi_brightness_adjust_notify,
-			pdev);
-		if (ACPI_FAILURE(status))
-			dev_err(&pdev->dev, "Error installing notify handler\n");
-	}
 
 	return 0;
 

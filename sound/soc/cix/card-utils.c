@@ -882,9 +882,14 @@ static const char *cix_acpi_dp_audio_get_codec_name(int idx)
 		return NULL;
 
 	dpdev = device_find_any_child(dev);
-	if (!dpdev)
+	if (!dpdev) {
+		put_device(dev);
 		return NULL;
+	}
 
+	/* Note: dev and dpdev refs are leaked intentionally —
+	 * the returned name must remain valid for the card lifetime.
+	 */
 	return dev_name(dpdev);
 }
 
@@ -894,7 +899,7 @@ int cix_card_parse_acpi(struct cix_asoc_card *priv)
 	struct snd_soc_dai_link *link;
 	struct dai_link_info *link_info;
 	struct device *dev = card->dev;
-	int ret, idx, i, num_links = 0;
+	int ret = 0, idx, i, num_links = 0;
 
 	ret = cix_gpio_init(priv);
 	if (ret)

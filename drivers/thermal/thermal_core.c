@@ -403,6 +403,24 @@ void thermal_zone_device_critical_reboot(struct thermal_zone_device *tz)
 static void handle_critical_trips(struct thermal_zone_device *tz,
 				  const struct thermal_trip *trip)
 {
+	/*
+	 * On the very first temperature reading after zone initialisation,
+	 * sensors may return bogus values (e.g. SCMI sensors that have not
+	 * stabilised yet).  Re-read the sensor once to confirm the critical
+	 * condition before triggering a hardware-protection action.
+	 */
+	if (tz->last_temperature == THERMAL_TEMP_INIT) {
+		int temp;
+
+		if (__thermal_zone_get_temp(tz, &temp) ||
+		    temp < trip->temperature) {
+			dev_warn(&tz->device,
+				 "%s: first critical reading (%d mC) not confirmed on re-read (%d mC), deferring\n",
+				 tz->type, tz->temperature, temp);
+			return;
+		}
+	}
+
 	trace_thermal_zone_trip(tz, thermal_zone_trip_id(tz, trip), trip->type);
 
 	if (trip->type == THERMAL_TRIP_CRITICAL)

@@ -56,9 +56,9 @@ module_param(mem_accounting, bool, 0444);
 MODULE_PARM_DESC(mem_accounting,
 		 "Enable cgroup-based memory accounting for dma-buf heap allocations (default=false).");
 
-static int dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
-				 u32 fd_flags,
-				 u64 heap_flags)
+int dma_heap_bufferfd_alloc(struct dma_heap *heap, size_t len,
+			   u32 fd_flags,
+			   u64 heap_flags)
 {
 	struct dma_buf *dmabuf;
 	int fd;
@@ -207,6 +207,19 @@ void *dma_heap_get_drvdata(struct dma_heap *heap)
 	return heap->priv;
 }
 EXPORT_SYMBOL_NS_GPL(dma_heap_get_drvdata, "DMA_BUF_HEAP");
+
+/**
+ * dma_heap_get_dev - get device struct for the heap
+ * @heap: DMA-Heap to retrieve the device struct from
+ *
+ * Returns:
+ * The device struct for the heap.
+ */
+struct device *dma_heap_get_dev(struct dma_heap *heap)
+{
+	return heap->heap_dev;
+}
+EXPORT_SYMBOL_NS_GPL(dma_heap_get_dev, "DMA_BUF_HEAP");
 
 /**
  * dma_heap_get_name - get heap name

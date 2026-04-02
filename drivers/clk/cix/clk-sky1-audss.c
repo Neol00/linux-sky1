@@ -2,6 +2,7 @@
 // Copyright 2024 Cix Technology Group Co., Ltd.
 
 #include <linux/acpi.h>
+#include <linux/arm-smccc.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/delay.h>
@@ -66,6 +67,133 @@ struct composite_clk_cfg {
 
 static DEFINE_SPINLOCK(lock);
 static struct clk_hw_onecell_data *clk_data;
+
+/*
+ * SCMI-over-SMC transport for power domain & clock control.
+ * The SCP exposes power domain protocol (0x11) on the SMC channel,
+ * NOT on the mailbox channel.  The mailbox PRSS method silently
+ * succeeds but has no effect on actual power state.
+ * Shared memory and func_id match the DT arm,scmi-smc transport.
+ */
+#define SMC_SCMI_FUNC_ID	0xc2000001UL
+#define SMC_SCMI_SHMEM_PHYS	0x84380000UL
+#define SMC_SCMI_SHMEM_SIZE	0x80
+
+#define SHMEM_OFF_CHAN_STATUS	0x04
+#define SHMEM_OFF_FLAGS		0x10
+#define SHMEM_OFF_LENGTH	0x14
+#define SHMEM_OFF_MSG_HEADER	0x18
+#define SHMEM_OFF_MSG_PAYLOAD	0x1c
+#define SHMEM_CHAN_FREE		BIT(0)
+
+#define SCMI_HDR(proto, msg)	\
+	(((msg) & 0xFF) | (((proto) & 0xFF) << 10))
+
+#define SKY1_PD_AUDIO		0
+
+/*
+ * Send an SCMI message via the SMC transport channel.
+ * Returns the SCMI status word (0 = success).
+ */
+static int sky1_smc_scmi_send(struct device *dev, u32 protocol, u32 msg_id,
+			      const u32 *payload, unsigned int payload_words,
+			      u32 *resp_status)
+{
+	void __iomem *shmem;
+	struct arm_smccc_res res;
+	int timeout;
+	unsigned int i;
+
+	shmem = ioremap(SMC_SCMI_SHMEM_PHYS, SMC_SCMI_SHMEM_SIZE);
+	if (!shmem) {
+		dev_err(dev, "Cannot map SCMI SMC shmem\n");
+		return -ENOMEM;
+	}
+
+	timeout = 1000;
+	while (timeout-- > 0) {
+		if (ioread32(shmem + SHMEM_OFF_CHAN_STATUS) & SHMEM_CHAN_FREE)
+			break;
+		udelay(10);
+	}
+	if (timeout <= 0) {
+		dev_err(dev, "SCMI SMC channel busy\n");
+		iounmap(shmem);
+		return -EBUSY;
+	}
+
+	iowrite32(0, shmem + SHMEM_OFF_CHAN_STATUS);
+	iowrite32(0, shmem + SHMEM_OFF_FLAGS);
+	iowrite32(4 + payload_words * 4, shmem + SHMEM_OFF_LENGTH);
+	iowrite32(SCMI_HDR(protocol, msg_id), shmem + SHMEM_OFF_MSG_HEADER);
+	for (i = 0; i < payload_words; i++)
+		iowrite32(payload[i], shmem + SHMEM_OFF_MSG_PAYLOAD + i * 4);
+
+	arm_smccc_smc(SMC_SCMI_FUNC_ID,
+		      SMC_SCMI_SHMEM_PHYS >> 12, 0,
+		      0, 0, 0, 0, 0, &res);
+
+	if (res.a0) {
+		dev_err(dev, "SMC SCMI call failed: a0=0x%lx\n", res.a0);
+		iowrite32(SHMEM_CHAN_FREE, shmem + SHMEM_OFF_CHAN_STATUS);
+		iounmap(shmem);
+		return -EIO;
+	}
+
+	if (resp_status)
+		*resp_status = ioread32(shmem + SHMEM_OFF_MSG_PAYLOAD);
+
+	iowrite32(SHMEM_CHAN_FREE, shmem + SHMEM_OFF_CHAN_STATUS);
+	iounmap(shmem);
+	return 0;
+}
+
+/*
+ * Power on the audio domain via SMC SCMI POWER_STATE_SET.
+ * protocol 0x11, message 0x04, payload: flags(0) + domain + state.
+ */
+static int sky1_audio_power_on(struct device *dev)
+{
+	u32 payload[3] = { 0, SKY1_PD_AUDIO, 0 }; /* flags, domain, ON */
+	u32 status;
+	int ret;
+
+	ret = sky1_smc_scmi_send(dev, 0x11, 0x04, payload, 3, &status);
+	if (ret)
+		return ret;
+	if (status != 0) {
+		dev_err(dev, "SCMI POWER_STATE_SET(audio): error 0x%x\n",
+			status);
+		return -EIO;
+	}
+	dev_info(dev, "SCMI audio power domain ON via SMC\n");
+	return 0;
+}
+
+/*
+ * Set a clock rate via SMC SCMI CLOCK_RATE_SET.
+ * protocol 0x14, message 0x05, payload: flags(0) + clk_id + rate_low + rate_hi.
+ */
+static int sky1_smc_clock_rate_set(struct device *dev, u32 clk_id, u64 rate)
+{
+	u32 payload[4] = { 0, clk_id, (u32)(rate & 0xFFFFFFFF),
+			   (u32)(rate >> 32) };
+	u32 status;
+	int ret;
+
+	ret = sky1_smc_scmi_send(dev, 0x14, 0x05, payload, 4, &status);
+	if (ret)
+		return ret;
+	if (status != 0) {
+		dev_warn(dev,
+			 "SMC CLOCK_RATE_SET(clk %u, %llu Hz): SCMI error 0x%x\n",
+			 clk_id, rate, status);
+		return -EIO;
+	}
+	dev_info(dev, "SMC CLOCK_RATE_SET(clk %u, %llu Hz): OK\n",
+		 clk_id, rate);
+	return 0;
+}
 
 static u32 reg_save[][2] = {
 	{ INFO_HIFI0,  0 },
@@ -266,21 +394,24 @@ static const struct composite_clk_cfg audss_clks[] = {
 	    INFO_CLK_DIV, 0, 2, 0,
 	    INFO_CLK_GATE, 16, 0,
 	    CLK_GET_RATE_NOCACHE),
-	/* hda */
+	/* hda — CLK_IGNORE_UNUSED prevents clk_disable_unused() from gating
+	 * these before the HDA module loads, which would kill the HDA link
+	 * and prevent codec detection (ALC256 not found).
+	 */
 	CFG(CLK_HDA_SYS,
 	    "audss_hda_sys",
 	    hda_sys_parent,
 	    -1, 0, 0, 0,
 	    INFO_CLK_DIV, 0, 2, 0,
 	    INFO_CLK_GATE, 14, 0,
-	    CLK_GET_RATE_NOCACHE),
+	    CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED),
 	CFG(CLK_HDA_HDA,
 	    "audss_hda_hda",
 	    hda_hda_parent,
 	    -1, 0, 0, 0,
 	    -1, 0, 0, 0,
 	    INFO_CLK_GATE, 14, 0,
-	    CLK_GET_RATE_NOCACHE),
+	    CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED),
 	/* dmac */
 	CFG(CLK_DMAC_AXI,
 	    "audss_dmac_axi",
@@ -650,7 +781,7 @@ static int sky1_audss_clk_divider_set_rate(struct clk_hw *hw,
 {
 	struct clk_divider *divider = to_clk_divider(hw);
 	struct sky1_clk_divider *sky1_div = to_sky1_clk_divider(divider);
-	int value;
+	int value, ret;
 	unsigned long flags = 0;
 	u32 val;
 
@@ -667,7 +798,14 @@ static int sky1_audss_clk_divider_set_rate(struct clk_hw *hw,
 	if (divider->flags & CLK_DIVIDER_HIWORD_MASK) {
 		val = clk_div_mask(divider->width) << (divider->shift + 16);
 	} else {
-		val = regmap_read(sky1_div->regmap, sky1_div->offset, &val);
+		ret = regmap_read(sky1_div->regmap, sky1_div->offset, &val);
+		if (ret) {
+			if (divider->lock)
+				spin_unlock_irqrestore(divider->lock, flags);
+			else
+				__release(divider->lock);
+			return ret;
+		}
 		val &= ~(clk_div_mask(divider->width) << divider->shift);
 	}
 	val |= (u32)value << divider->shift;
@@ -1013,47 +1151,23 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 	struct clk_hw **clk_table;
 	void __iomem *rcsu_base;
 	struct device_node *parent_np;
-	struct regmap *regmap_cru;
+	struct regmap *regmap_cru = NULL;
 	int i, ret;
 
-	parent_np = of_get_parent(pdev->dev.of_node);
-	regmap_cru = syscon_node_to_regmap(parent_np);
-	of_node_put(parent_np);
+	if (pdev->dev.of_node) {
+		parent_np = of_get_parent(pdev->dev.of_node);
+		regmap_cru = syscon_node_to_regmap(parent_np);
+		of_node_put(parent_np);
+	}
 
 	if (IS_ERR_OR_NULL(regmap_cru))
 		regmap_cru = device_syscon_regmap_lookup_by_property(dev,
 					"audss_cru");
 	if (IS_ERR_OR_NULL(regmap_cru)) {
-		/* ACPI fallback: directly create regmap from audss_cru memory */
-		struct fwnode_handle *cru_fn =
-			fwnode_find_reference(dev_fwnode(dev), "audss_cru", 0);
-		if (!IS_ERR_OR_NULL(cru_fn)) {
-			struct device *cru_dev = get_dev_from_fwnode(cru_fn);
-
-			fwnode_handle_put(cru_fn);
-			if (cru_dev) {
-				struct resource *res = platform_get_resource(
-					to_platform_device(cru_dev),
-					IORESOURCE_MEM, 0);
-				if (res) {
-					static const struct regmap_config cfg = {
-						.reg_bits = 32,
-						.val_bits = 32,
-						.reg_stride = 4,
-					};
-					void __iomem *base = devm_ioremap(
-						dev, res->start,
-						resource_size(res));
-					if (!IS_ERR_OR_NULL(base))
-						regmap_cru = devm_regmap_init_mmio(
-							dev, base, &cfg);
-				}
-				put_device(cru_dev);
-			}
-		}
+		dev_info(dev, "audss_cru regmap not available, deferring\n");
+		return -EPROBE_DEFER;
 	}
-	if (IS_ERR_OR_NULL(regmap_cru))
-		return -EINVAL;
+	dev_info(dev, "audss_cru: regmap acquired successfully\n");
 
 	clk_data = devm_kzalloc(&pdev->dev,
 				struct_size(clk_data, hws, AUDSS_MAX_CLKS),
@@ -1087,6 +1201,25 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 	pm_runtime_get_noresume(dev);
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
+
+	/*
+	 * Power on the audio domain via SMC SCMI before touching clocks.
+	 * In the DT path this is handled by the genpd framework
+	 * (power-domains = <&smc_devpd SKY1_PD_AUDIO>), but in the
+	 * ACPI path no SCMI POWER_STATE_SET is issued.  The power domain
+	 * protocol lives on the SMC transport (not the mailbox), so the
+	 * ACPI PRSS method is ineffective.  We must use arm_smccc_smc
+	 * directly, the same way the Mali GPU driver controls its domain.
+	 */
+	if (ACPI_COMPANION(dev)) {
+		int pret = sky1_audio_power_on(dev);
+		if (pret)
+			dev_warn(dev,
+				 "SCMI audio power-on via SMC failed (%d), clocks may not be configurable\n",
+				 pret);
+		/* Let SCP process the power state change */
+		usleep_range(1000, 2000);
+	}
 
 	/*
 	 * enable audio ss clocks since rcsu slave end feeded by
@@ -1134,18 +1267,21 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 	       FIELD_PREP(SKY1_AUDSS_RCSU_TIMEOUT_MASK, SKY1_AUDSS_RCSU_TIMEOUT_VAL),
 	       rcsu_base + SKY1_AUDSS_RCSU_TIMEOUT);
 
-	/* audio_clk4 clock fixed divider */
+	/* audio_clk4 clock fixed divider
+	 * CLK_IGNORE_UNUSED: these parent clocks must survive
+	 * clk_disable_unused() so the HDA module can enable them later.
+	 */
 	clk_table[CLK_AUD_CLK4_DIV2] =
 		devm_clk_hw_register_fixed_factor(dev,
 						  "audio_clk4_div2",
 						  "audio_clk4",
-						  CLK_GET_RATE_NOCACHE,
+						  CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
 						  1, 2);
 	clk_table[CLK_AUD_CLK4_DIV4] =
 		devm_clk_hw_register_fixed_factor(dev,
 						  "audio_clk4_div4",
 						  "audio_clk4",
-						  CLK_GET_RATE_NOCACHE,
+						  CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
 						  1, 4);
 
 	/* audio_clk5 clock fixed divider */
@@ -1153,7 +1289,7 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 		devm_clk_hw_register_fixed_factor(dev,
 						  "audio_clk5_div2",
 						  "audio_clk5",
-						  CLK_GET_RATE_NOCACHE,
+						  CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
 						  1, 2);
 
 	for (i = 0; i < ARRAY_SIZE(audss_clks); i++)

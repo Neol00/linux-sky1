@@ -5,10 +5,12 @@
 
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/acpi.h>
+#include <linux/delay.h>
 
 #define DPU0_RESET_MASK BIT(16)
 #define DPU1_RESET_MASK BIT(17)
@@ -82,6 +84,10 @@ static int cix_display_probe(struct platform_device *pdev)
        cix_display->reset_mask[4] = DISPLAY4_RESET_MASK;
 
        base = ioremap(DISPLAY_RESET_REG, 0x4);
+       if (!base) {
+               dev_err(dev, "Failed to ioremap display reset register\n");
+               return -ENOMEM;
+       }
 
        value = readl(base);
        dev_info(dev, "current reset value = 0x%x, reset-control=%d\n", value, control);
@@ -99,6 +105,7 @@ static int cix_display_probe(struct platform_device *pdev)
                 value &= (~MMHUB_RESET_MASK);
                 writel(value, base);
                 dev_info(dev, "assert reset, value = 0x%x, count=%d\n", value, count);
+                usleep_range(1000, 1500);
         }
 
        for (i = 0; i < 5; i++) {
@@ -129,11 +136,11 @@ static struct cix_acpi_display cix_acpi_display;
 static int __init cix_acpi_display_probe(void)
 {
        void *base;
-       int i, ret;
+       int i;
        u32 control, value, count;
        struct cix_acpi_display *cix_display = &cix_acpi_display;
        memset(cix_display, 0, sizeof(*cix_display));
-       control = 4;
+       control = 0x1b; /* bits 0,1,3,4: reset all four USB-C DP ports */
 
        cix_display->reset_mask[0] = DISPLAY0_RESET_MASK;
        cix_display->reset_mask[1] = DISPLAY1_RESET_MASK;
@@ -142,6 +149,8 @@ static int __init cix_acpi_display_probe(void)
        cix_display->reset_mask[4] = DISPLAY4_RESET_MASK;
 
        base = ioremap(DISPLAY_RESET_REG, 0x4);
+       if (!base)
+               return -ENOMEM;
 
        value = readl(base);
 
@@ -157,6 +166,7 @@ static int __init cix_acpi_display_probe(void)
         if (count) {
                 value &= (~MMHUB_RESET_MASK);
                 writel(value, base);
+                udelay(1000);
         }
 
        for (i = 0; i < 5; i++) {
@@ -194,7 +204,19 @@ struct platform_driver cix_display_driver = {
        },
 };
 
-core_initcall(cix_acpi_display_probe);
+static int __init cix_display_init(void)
+{
+       cix_acpi_display_probe();
+       return platform_driver_register(&cix_display_driver);
+}
+
+static void __exit cix_display_exit(void)
+{
+       platform_driver_unregister(&cix_display_driver);
+}
+
+core_initcall(cix_display_init);
+module_exit(cix_display_exit);
 
 MODULE_DESCRIPTION("Cix Display Driver");
 MODULE_LICENSE("GPL v2");

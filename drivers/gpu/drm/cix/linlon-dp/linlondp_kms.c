@@ -6,10 +6,12 @@
  */
 #include <linux/component.h>
 #include <linux/interrupt.h>
+#include <linux/aperture.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_fbdev_dma.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_managed.h>
@@ -23,7 +25,7 @@
 
 DEFINE_DRM_GEM_DMA_FOPS(linlondp_cma_fops);
 
-static bool enable_render = true;
+static bool enable_render = false;
 module_param(enable_render, bool, 0644);
 MODULE_PARM_DESC(enable_render, "Enable render node support (true/false)");
 
@@ -64,6 +66,7 @@ static irqreturn_t linlondp_kms_irq_handler(int irq, void *data)
 static struct drm_driver linlondp_kms_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	DRM_GEM_DMA_DRIVER_OPS_WITH_DUMB_CREATE(linlondp_gem_dma_dumb_create),
+	DRM_FBDEV_DMA_DRIVER_OPS,
 	.fops = &linlondp_cma_fops,
 	.name = "linlondp",
 	.desc = "Linlon Display Processor driver",
@@ -376,6 +379,8 @@ struct linlondp_kms_dev *linlondp_kms_attach(struct linlondp_dev *mdev)
 
 #if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	drm_kms_helper_poll_init(drm);
+
+	aperture_remove_all_conflicting_devices("linlondp");
 
 	err = drm_dev_register(drm, 0);
 	if (err)

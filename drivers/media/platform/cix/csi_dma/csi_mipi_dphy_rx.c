@@ -239,34 +239,6 @@ static int mipi_dphy_rx_s_power(struct v4l2_subdev *sd, int on)
 	return v4l2_subdev_call(remote_sd, core, s_power, on);
 }
 
-static int
-mipi_dphy_rx_g_frame_interval(struct v4l2_subdev *sd,
-			      struct v4l2_subdev_frame_interval *interval)
-{
-	struct dphy_rx *dphy = v4l2_subdev_to_dphy_rx(sd);
-	struct v4l2_subdev *remote_sd;
-
-	remote_sd = dphy->source_subdev;
-	if (!remote_sd)
-		return -EINVAL;
-
-	return v4l2_subdev_call(remote_sd, video, g_frame_interval, interval);
-}
-
-static int
-mipi_dphy_rx_s_frame_interval(struct v4l2_subdev *sd,
-			      struct v4l2_subdev_frame_interval *interval)
-{
-	struct dphy_rx *dphy = v4l2_subdev_to_dphy_rx(sd);
-	struct v4l2_subdev *remote_sd;
-
-	remote_sd = dphy->source_subdev;
-	if (!remote_sd)
-		return -EINVAL;
-
-	return v4l2_subdev_call(remote_sd, video, s_frame_interval, interval);
-}
-
 static int mipi_dphy_rx_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	int ret = 0;
@@ -374,8 +346,6 @@ static const struct v4l2_subdev_core_ops mipi_dphy_rx_core_ops = {
 };
 
 static const struct v4l2_subdev_video_ops mipi_dphy_rx_video_ops = {
-	.g_frame_interval = mipi_dphy_rx_g_frame_interval,
-	.s_frame_interval = mipi_dphy_rx_s_frame_interval,
 	.s_stream = mipi_dphy_rx_s_stream,
 };
 

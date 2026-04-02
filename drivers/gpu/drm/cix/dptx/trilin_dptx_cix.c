@@ -123,7 +123,6 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 	void *np;
 	const void *match;
 	struct drm_device *drm = master_data;
-	struct trilin_dptx_pdata *pdata;
 	struct trilin_dptx_cix_dev *cix_dptx = dev_get_drvdata(comp);
 	struct drm_encoder *encoder;
 	struct trilin_dpsub *dpsub;
@@ -148,13 +147,8 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 
 	if (has_acpi_companion(comp)) {
 		match = acpi_device_get_match_data(comp);
-		pdata = (struct trilin_dptx_pdata *)(((struct acpi_device_id *)
-							      match)
-							     ->driver_data);
 	} else {
 		match = of_match_node(trilin_dptx_dt_ids, np);
-		pdata = (struct trilin_dptx_pdata
-				 *)(((struct of_device_id *)match)->data);
 	}
 
 	if (unlikely(!match))
@@ -189,7 +183,8 @@ static void trilin_dptx_cix_unbind(struct device *comp, struct device *master,
 
 	trilin_dp_remove(dpsub);
 
-	device_link_del(dpsub->link);
+	if (dpsub->link)
+		device_link_del(dpsub->link);
 }
 
 static const struct component_ops trilin_dptx_cix_ops = {
@@ -273,6 +268,11 @@ static int trilin_dptx_cix_probe(struct platform_device *pdev)
 		dpu_pdev = of_find_device_by_node(dev_b_node);
 		of_node_put(dev_b_node);
 		of_node_put(remote_ep);
+
+		if (!dpu_pdev) {
+			dev_err(&pdev->dev, "DPU platform device not found\n");
+			continue;
+		}
 
 		struct linlondp_drv *drv_data = platform_get_drvdata(dpu_pdev);
 
@@ -432,6 +432,7 @@ module_exit(trilin_dp_driver_exit);
 MODULE_AUTHOR("Fei Mao <fei.mao@cixtech.com>");
 MODULE_DESCRIPTION("Cix Platforms DP Driver");
 MODULE_LICENSE("GPL v2");
+MODULE_SOFTDEP("pre: phy_cix_usbdp");
 #if IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 MODULE_SOFTDEP("pre: linlon_dp");
 #endif

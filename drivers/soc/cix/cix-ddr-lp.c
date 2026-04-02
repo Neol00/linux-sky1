@@ -65,6 +65,7 @@ static int cix_enable_ddrlp(struct cix_ddrlp_data *dd)
 	return 0;
 }
 
+int cix_set_ddrlp(int on);
 int cix_set_ddrlp(int on)
 {
 	if (!gdd)

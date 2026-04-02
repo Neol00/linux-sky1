@@ -307,7 +307,7 @@ static const struct drm_private_state_funcs linlondp_timing_ctrlr_obj_funcs = {
 static int linlondp_timing_ctrlr_obj_add(struct linlondp_kms_dev *kms,
 					 struct linlondp_timing_ctrlr *ctrlr)
 {
-	struct linlondp_compiz_state *st;
+	struct linlondp_timing_ctrlr_state *st;
 
 	st = kzalloc(sizeof(*st), GFP_KERNEL);
 	if (!st)

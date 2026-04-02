@@ -155,7 +155,7 @@ static struct notifier_block smmu_attach_nb = {
 	.notifier_call = smmu_attach_notify,
 };
 
-void cix_pcie_io_space_init(void)
+static void cix_pcie_io_space_init(void)
 {
 	/*
 	 * Default IO space is limited to IO_SPACE_LIMIT, which not enough
@@ -164,7 +164,7 @@ void cix_pcie_io_space_init(void)
 	ioport_resource.end = -1;
 }
 
-int cix_pcie_quirks_init(void)
+static int cix_pcie_quirks_init(void)
 {
 	pcie_page = alloc_pages(GFP_KERNEL, 0);
 	if (!pcie_page) {
@@ -182,6 +182,8 @@ static void smmu_mmhub_reset_before_quirks(struct device *dev)
 	struct arm_smccc_res smccc_res;
 
 	res = platform_get_resource(to_platform_device(dev), IORESOURCE_MEM, 0);
+	if (!res)
+		return;
 
 	if (res->start != MMHUB_BASE_STRT)
 		return;
@@ -198,6 +200,8 @@ static void smmu_mmhub_reset_after_quirks(struct device *dev)
 	struct arm_smccc_res smccc_res;
 
 	res = platform_get_resource(to_platform_device(dev), IORESOURCE_MEM, 0);
+	if (!res)
+		return;
 
 	if (res->start != MMHUB_BASE_STRT)
 		return;

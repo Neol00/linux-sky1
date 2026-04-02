@@ -568,16 +568,12 @@ static int linlondp_parse_acpi(struct device *dev, struct linlondp_dev *mdev)
             return ret;
     }
 
-    ret = device_property_read_u64(dev, "aclk_freq_fixed", (u64 *)&mdev->aclk_freq_fixed);
+    ret = device_property_read_u32(dev, "aclk_freq_fixed", (u32 *)&mdev->aclk_freq_fixed);
     if (ret)
         mdev->aclk_freq_fixed = 0;
 
     mdev->side_by_side = !device_property_read_u32(dev, "side_by_side_master",
                            &mdev->side_by_side_master);
-
-    ret = device_property_read_u32(dev, "aclk_freq_fixed", (u32 *)&mdev->aclk_freq_fixed);
-    if (ret)
-        mdev->aclk_freq_fixed = 0;
 
     if (device_property_present(dev, "smart_aclk_freq"))
         mdev->smart_aclk_freq = true;
@@ -607,7 +603,7 @@ static int linlondp_gop_get(void)
 	return enabled_by_gop;
 }
 
-static void linlondp_gop_set(void)
+static void __maybe_unused linlondp_gop_set(void)
 {
 	struct arm_smccc_res res;
 	int dpu_gop_bit = 1;
@@ -637,10 +633,10 @@ struct linlondp_dev *linlondp_dev_create(struct device *dev)
 
 	mdev->dev = dev;
 
-    err = device_property_read_u32(dev, "enabled_by_gop",
-                               (u32 *)&mdev->enabled_by_gop);
-    if (err)
-        mdev->enabled_by_gop = 0;
+	err = device_property_read_u32(dev, "enabled_by_gop",
+				      (u32 *)&mdev->enabled_by_gop);
+	if (err)
+		mdev->enabled_by_gop = 0;
 
 	is_insmod = linlondp_gop_get();
 	if (is_insmod)
@@ -813,7 +809,7 @@ int linlondp_dev_resume(struct linlondp_dev *mdev)
 			DRM_ERROR("Initialize hardware failed!\n");
 	}
 
-	return 0;
+	return err;
 }
 
 int linlondp_dev_suspend(struct linlondp_dev *mdev)

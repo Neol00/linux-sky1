@@ -39,6 +39,10 @@ struct csi2rx_priv {
 	u8					max_streams;
 	bool				has_internal_dphy;
 
+	int				error_irq;
+	u8				num_pixels[CSI2RX_STREAMS_MAX];
+	u32				events[16]; /* must be >= CSI2RX_NUM_EVENTS */
+
 	struct v4l2_async_notifier	notifier;
 	struct media_pad			pads[CSI2RX_PAD_MAX];
 

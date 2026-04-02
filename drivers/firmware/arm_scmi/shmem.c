@@ -164,14 +164,20 @@ static void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
 			 ktime_after(ktime_get(), stop));
 	if (!(ioread32(&shmem->channel_status) &
 	      SCMI_SHMEM_CHAN_STAT_CHANNEL_FREE)) {
-		WARN_ON_ONCE(1);
-		dev_err(cinfo->dev,
-			"Timeout waiting for a free TX channel !\n");
-		return;
+		dev_warn(cinfo->dev,
+			"Timeout waiting for a free TX channel, forcing clear\n");
+		/* Force-clear the stuck channel so SCMI can recover.
+		 * The previous message response will be lost, but this
+		 * prevents permanent SCMI communication failure.
+		 */
+		iowrite32(SCMI_SHMEM_CHAN_STAT_CHANNEL_FREE,
+			  &shmem->channel_status);
 	}
 
 	/* Mark channel busy + clear error */
 	iowrite32(0x0, &shmem->channel_status);
+	/* Ensure status write is visible before payload writes */
+	wmb();
 	iowrite32(xfer->hdr.poll_completion ? 0 : SCMI_SHMEM_FLAG_INTR_ENABLED,
 		  &shmem->flags);
 	iowrite32(sizeof(shmem->msg_header) + xfer->tx.len, &shmem->length);
@@ -190,6 +196,8 @@ static void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
 #endif
 		copy_toio(shmem->msg_payload, xfer->tx.buf, xfer->tx.len);
 	}
+	/* Ensure all payload writes complete before signaling firmware */
+	wmb();
 }
 
 static u32 shmem_read_header(struct scmi_shared_mem __iomem *shmem)

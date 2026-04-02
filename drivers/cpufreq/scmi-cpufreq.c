@@ -53,6 +53,8 @@ static unsigned int scmi_cpufreq_get_rate(unsigned int cpu)
 		return 0;
 
 	priv = policy->driver_data;
+	if (unlikely(!priv))
+		return 0;
 
 	ret = perf_ops->freq_get(ph, priv->domain_id, &rate, false);
 	if (ret)
@@ -69,7 +71,12 @@ static int
 scmi_cpufreq_set_target(struct cpufreq_policy *policy, unsigned int index)
 {
 	struct scmi_data *priv = policy->driver_data;
-	u64 freq = policy->freq_table[index].frequency;
+	u64 freq;
+
+	if (unlikely(!priv))
+		return -ENODEV;
+
+	freq = policy->freq_table[index].frequency;
 
 	return perf_ops->freq_set(ph, priv->domain_id, freq * 1000, false);
 }
@@ -79,6 +86,9 @@ static unsigned int scmi_cpufreq_fast_switch(struct cpufreq_policy *policy,
 {
 	struct scmi_data *priv = policy->driver_data;
 	unsigned long freq = target_freq;
+
+	if (unlikely(!priv))
+		return 0;
 
 	if (!perf_ops->freq_set(ph, priv->domain_id, freq * 1000, true))
 		return target_freq;

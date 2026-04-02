@@ -309,6 +309,9 @@ static int __maybe_unused linlondp_pm_resume(struct device *dev)
 	if (!pm_runtime_status_suspended(dev))
 		linlondp_dev_resume(mdrv->mdev);
 
+	if (!mdrv->kms)
+		return 0;
+
 	return drm_mode_config_helper_resume(&mdrv->kms->base);
 }
 
@@ -316,11 +319,18 @@ static int __maybe_unused linlondp_pm_restore(struct device *dev)
 {
 	struct linlondp_drv *mdrv = dev_get_drvdata(dev);
 
-	of_property_read_u32(dev->of_node, "enabled_by_gop",
-			     (u32 *)&mdrv->mdev->enabled_by_gop);
+	if (!mdrv || !mdrv->mdev)
+		return 0;
+
+	if (dev->of_node)
+		of_property_read_u32(dev->of_node, "enabled_by_gop",
+				     (u32 *)&mdrv->mdev->enabled_by_gop);
 
 	if (!pm_runtime_status_suspended(dev))
 		linlondp_dev_resume(mdrv->mdev);
+
+	if (!mdrv->kms)
+		return 0;
 
 	return drm_mode_config_helper_resume(&mdrv->kms->base);
 }

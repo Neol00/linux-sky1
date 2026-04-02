@@ -591,8 +591,21 @@ static int scmi_clock_rate_set(const struct scmi_protocol_handle *ph,
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
-	if (clk->rate_ctrl_forbidden)
+	if (clk->rate_ctrl_forbidden) {
+#ifdef CONFIG_ARCH_CIX
+		/*
+		 * CIX Sky1 firmware does not advertise CLOCK_RATE_CONTROL_ALLOWED
+		 * for some clocks (e.g. audio PLLs), but rate setting works.
+		 * Log and continue — firmware will reject truly unsupported
+		 * requests with an error status.
+		 */
+		dev_dbg(ph->dev,
+			"SCMI clock %u: rate_ctrl_forbidden, attempting anyway (CIX quirk)\n",
+			clk_id);
+#else
 		return -EACCES;
+#endif
+	}
 
 	ret = ph->xops->xfer_get_init(ph, CLOCK_RATE_SET, sizeof(*cfg), 0, &t);
 	if (ret)
@@ -808,7 +821,9 @@ scmi_clock_config_get_v2(const struct scmi_protocol_handle *ph, u32 clk_id,
 	struct scmi_msg_clock_config_get *cfg;
 
 	ret = ph->xops->xfer_get_init(ph, CLOCK_CONFIG_GET,
-				      sizeof(*cfg), 0, &t);
+				      sizeof(*cfg),
+				      sizeof(struct scmi_msg_resp_clock_config_get),
+				      &t);
 	if (ret)
 		return ret;
 
@@ -1097,8 +1112,13 @@ static int scmi_clock_protocol_init(const struct scmi_protocol_handle *ph)
 		struct scmi_clock_info *clk = cinfo->clk + clkid;
 
 		ret = scmi_clock_attributes_get(ph, clkid, cinfo);
-		if (!ret)
-			scmi_clock_describe_rates_get(ph, clkid, clk);
+		if (ret) {
+			dev_warn(ph->dev,
+				 "SCMI clock %u: failed to get attributes (%d), skipping rate describe\n",
+				 clkid, ret);
+			continue;
+		}
+		scmi_clock_describe_rates_get(ph, clkid, clk);
 	}
 
 	if (PROTOCOL_REV_MAJOR(ph->version) >= 0x3) {

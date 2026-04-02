@@ -24,6 +24,7 @@
 
 struct rpmsg_device *g_sfh_rpdev;
 
+struct rpmsg_device *sfh_get_rpmsg(void);
 struct rpmsg_device *sfh_get_rpmsg(void)
 {
 	return g_sfh_rpdev;

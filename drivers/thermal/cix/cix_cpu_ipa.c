@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include "cix_cpu_ipa.h"
 
 #define REG_OFFSET 0x40
 
@@ -27,18 +28,28 @@ struct cpu_ipa {
 
 static int cix_get_static_power(int cpu)
 {
-	int pcpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+	int pcpu;
+	CPU_IPA_INFO *info;
 
-	CPU_IPA_INFO *info = ci->regs + pcpu * REG_OFFSET;
+	if (!ci || !ci->regs)
+		return 0;
+
+	pcpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+	info = ci->regs + pcpu * REG_OFFSET;
 
 	return info->static_power;
 }
 
 static int cix_get_dynamic_power(int cpu)
 {
-	int pcpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+	int pcpu;
+	CPU_IPA_INFO *info;
 
-	CPU_IPA_INFO *info = ci->regs + pcpu * REG_OFFSET;
+	if (!ci || !ci->regs)
+		return 0;
+
+	pcpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
+	info = ci->regs + pcpu * REG_OFFSET;
 
 	return info->dynamic_power;
 }
@@ -86,7 +97,12 @@ static int cpu_ipa_probe(struct platform_device *pdev)
 
 static void cpu_ipa_shutdown(struct platform_device *pdev)
 {
-	return;
+	ci = NULL;
+}
+
+static void cpu_ipa_remove(struct platform_device *pdev)
+{
+	ci = NULL;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -113,6 +129,7 @@ MODULE_DEVICE_TABLE(of, cpu_ipa_of_match);
 
 static struct platform_driver cpu_ipa_platdrv = {
 	.probe		= cpu_ipa_probe,
+	.remove		= cpu_ipa_remove,
 	.shutdown	= cpu_ipa_shutdown,
 	.driver = {
 		.name	= "cpu-ipa",

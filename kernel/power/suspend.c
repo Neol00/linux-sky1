@@ -28,6 +28,10 @@
 #include <linux/swait.h>
 #include <linux/ftrace.h>
 #include <trace/events/power.h>
+#ifdef CONFIG_PLAT_BBOX
+#include <linux/soc/cix/cix_suspend.h>
+#include <linux/soc/cix/rdr_pub.h>
+#endif
 #include <linux/compiler.h>
 #include <linux/moduleparam.h>
 #include <linux/fs.h>

@@ -17,6 +17,7 @@
 #include <linux/of_irq.h>
 #include <linux/limits.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/processor.h>
 #include <linux/slab.h>
 
@@ -123,10 +124,12 @@ smc_channel_lock_acquire(struct scmi_smc *scmi_info,
 
 static inline void smc_channel_lock_release(struct scmi_smc *scmi_info)
 {
-	if (IS_ENABLED(CONFIG_ARM_SCMI_TRANSPORT_SMC_ATOMIC_ENABLE))
+	if (IS_ENABLED(CONFIG_ARM_SCMI_TRANSPORT_SMC_ATOMIC_ENABLE)) {
+		smp_mb();
 		atomic_set(&scmi_info->inflight, INFLIGHT_NONE);
-	else
+	} else {
 		mutex_unlock(&scmi_info->shmem_lock);
+	}
 }
 
 static int smc_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
@@ -151,9 +154,12 @@ static int smc_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 	if (IS_ERR(scmi_info->shmem))
 		return PTR_ERR(scmi_info->shmem);
 
-	ret = of_property_read_u32(dev->of_node, "arm,smc-id", &func_id);
-	if (ret < 0)
-		return ret;
+	ret = device_property_read_u32(dev, "arm,smc-id", &func_id);
+	if (ret < 0) {
+		ret = of_property_read_u32(dev->of_node, "arm,smc-id", &func_id);
+		if (ret < 0)
+			return ret;
+	}
 
 	if (of_device_is_compatible(dev->of_node, "qcom,scmi-smc")) {
 		resource_size_t size = resource_size(&res);
@@ -168,7 +174,8 @@ static int smc_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 		memcpy_fromio(&cap_id, ptr, sizeof(cap_id));
 	}
 
-	if (of_device_is_compatible(dev->of_node, "arm,scmi-smc-param")) {
+	if (dev->of_node &&
+	    of_device_is_compatible(dev->of_node, "arm,scmi-smc-param")) {
 		scmi_info->param_page = SHMEM_PAGE(res.start);
 		scmi_info->param_offset = SHMEM_OFFSET(res.start);
 	}
@@ -178,6 +185,12 @@ static int smc_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 	 * the return of the SMC call.
 	 */
 	scmi_info->irq = of_irq_get_byname(cdev->of_node, "a2p");
+	if (scmi_info->irq <= 0 && !cdev->of_node) {
+		/* ACPI path: try platform IRQ as fallback */
+		struct platform_device *pdev = to_platform_device(cdev);
+
+		scmi_info->irq = platform_get_irq_optional(pdev, 0);
+	}
 	if (scmi_info->irq > 0) {
 		ret = request_irq(scmi_info->irq, smc_msg_done_isr,
 				  IRQF_NO_SUSPEND, dev_name(dev), scmi_info);
@@ -280,7 +293,7 @@ static const struct scmi_transport_ops scmi_smc_ops = {
 
 static struct scmi_desc scmi_smc_desc = {
 	.ops = &scmi_smc_ops,
-	.max_rx_timeout_ms = 30,
+	.max_rx_timeout_ms = 100,
 	.max_msg = 20,
 	.max_msg_size = SCMI_SHMEM_MAX_PAYLOAD_SIZE,
 	/*

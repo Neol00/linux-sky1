@@ -40,6 +40,7 @@ struct acpi_forbidden_ext {
 } acpi_forbidden_ext;
 
 /* Here just concern one case the early phase to register forbidden ids. */
+int forbidden_ids_register(struct acpi_device_id *ids);
 int forbidden_ids_register(struct acpi_device_id *ids) {
 	if (ids && acpi_forbidden_ext.len < MAX_ACPI_FIBIDDEN_ID_LIST) {
 		acpi_forbidden_ext.id_list[acpi_forbidden_ext.len] = ids;

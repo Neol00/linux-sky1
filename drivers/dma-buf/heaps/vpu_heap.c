@@ -173,8 +173,8 @@ static struct dma_buf *vpu_heap_export_dmabuf(struct vpu_buffer *buffer,
 
 static struct dma_buf *vpu_heap_allocate(struct dma_heap *heap,
 			     unsigned long len,
-			     unsigned long fd_flags,
-			     unsigned long heap_flags)
+			     u32 fd_flags,
+			     u64 heap_flags)
 {
 	struct vpu_heap *vpu_heap = dma_heap_get_drvdata(heap);
 	struct vpu_buffer *vpu_buffer;

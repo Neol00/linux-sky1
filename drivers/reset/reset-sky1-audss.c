@@ -142,47 +142,27 @@ static int sky1_audss_reset_probe(struct platform_device *pdev)
 	struct sky1_rst *sky1rst;
 	struct device *dev = &pdev->dev;
 	struct device_node *parent_np;
-	struct regmap *regmap_cru;
+	struct regmap *regmap_cru = NULL;
 	const struct sky1_rst_variant *variant = device_get_match_data(dev);
 
-	parent_np = of_get_parent(pdev->dev.of_node);
-	regmap_cru = syscon_node_to_regmap(parent_np);
-	of_node_put(parent_np);
+	if (!variant) {
+		dev_err(dev, "No match data for audss reset controller\n");
+		return -ENODEV;
+	}
+
+	if (pdev->dev.of_node) {
+		parent_np = of_get_parent(pdev->dev.of_node);
+		regmap_cru = syscon_node_to_regmap(parent_np);
+		of_node_put(parent_np);
+	}
 
 	if (IS_ERR_OR_NULL(regmap_cru))
 		regmap_cru = device_syscon_regmap_lookup_by_property(dev,
 					"audss_cru");
 	if (IS_ERR_OR_NULL(regmap_cru)) {
-		/* ACPI fallback: directly create regmap from audss_cru memory */
-		struct fwnode_handle *cru_fn =
-			fwnode_find_reference(dev_fwnode(dev), "audss_cru", 0);
-		if (!IS_ERR_OR_NULL(cru_fn)) {
-			struct device *cru_dev = get_dev_from_fwnode(cru_fn);
-
-			fwnode_handle_put(cru_fn);
-			if (cru_dev) {
-				struct resource *res = platform_get_resource(
-					to_platform_device(cru_dev),
-					IORESOURCE_MEM, 0);
-				if (res) {
-					static const struct regmap_config cfg = {
-						.reg_bits = 32,
-						.val_bits = 32,
-						.reg_stride = 4,
-					};
-					void __iomem *base = devm_ioremap(
-						dev, res->start,
-						resource_size(res));
-					if (!IS_ERR_OR_NULL(base))
-						regmap_cru = devm_regmap_init_mmio(
-							dev, base, &cfg);
-				}
-				put_device(cru_dev);
-			}
-		}
+		dev_info(dev, "audss_cru regmap not available, deferring\n");
+		return -EPROBE_DEFER;
 	}
-	if (IS_ERR_OR_NULL(regmap_cru))
-		return -EINVAL;
 
 	sky1rst = devm_kzalloc(dev, sizeof(*sky1rst), GFP_KERNEL);
 	if (!sky1rst)

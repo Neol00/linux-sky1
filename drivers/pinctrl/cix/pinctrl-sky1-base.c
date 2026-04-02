@@ -295,7 +295,7 @@ static int sky1_acpi_node_to_map(struct pinctrl_dev *pctldev,
 		fun_selector = info->function.function_number;
 		grp_selector = info->function.group_number;
 		if (fun_selector >= ARRAY_SIZE(sky1_gpio_functions) ||
-		    grp_selector >= spctl->info->npins) {
+		    grp_selector >= spctl->group_index) {
 			ret = -EINVAL;
 			goto out_free;
 		}

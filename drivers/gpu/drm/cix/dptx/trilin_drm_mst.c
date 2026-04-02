@@ -406,7 +406,7 @@ static int trilin_dp_mst_get_modes(struct drm_connector *connector)
 	return ret;
 }
 
-enum drm_mode_status trilin_dp_mst_mode_valid(struct drm_connector *connector,
+static enum drm_mode_status trilin_dp_mst_mode_valid(struct drm_connector *connector,
 					      const struct drm_display_mode *mode)
 {
 	const int min_bpp = 6 * 3;
@@ -711,6 +711,7 @@ static void trilin_mst_encoder_enable(struct drm_encoder *encoder)
 	if (rc) {
 		DP_ERR("[%d] DP display prepare failed, rc=%d\n",
 		       mst_encoder->id, rc);
+		mutex_unlock(&mst->mst_lock);
 		return;
 	}
 
@@ -749,6 +750,7 @@ static void trilin_mst_encoder_disable(struct drm_encoder *encoder)
 
 	if (!(dp->state & DPTX_STATE_INITIALIZED)) {
 		DP_DEBUG("[not init]");
+		mutex_unlock(&mst->mst_lock);
 		return;
 	}
 

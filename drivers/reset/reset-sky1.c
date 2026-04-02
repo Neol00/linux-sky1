@@ -278,11 +278,18 @@ static int sky1_reset_set(struct reset_controller_dev *rcdev,
 static int sky1_reset(struct reset_controller_dev *rcdev,
 			     unsigned long id)
 {
-	sky1_reset_set(rcdev, id, true);
+	int ret;
+
+	ret = sky1_reset_set(rcdev, id, true);
+	if (ret)
+		return ret;
+
 	usleep_range(SKY1_RESET_SLEEP_MIN_US,
 		     SKY1_RESET_SLEEP_MAX_US);
 
-	sky1_reset_set(rcdev, id, false);
+	ret = sky1_reset_set(rcdev, id, false);
+	if (ret)
+		return ret;
 
 	/*
 	 * Ensure component is taken out reset state by sleeping also after
@@ -310,11 +317,15 @@ static int sky1_reset_status(struct reset_controller_dev *rcdev,
 			       unsigned long id)
 {
 	unsigned int value = 0;
+	int ret;
 	struct sky1_src *sky1_src = to_sky1_src(rcdev);
 	const struct sky1_src_signal *signal = &sky1_src->signals[id];
-	regmap_read(sky1_src->regmap, signal->offset, &value);
-	return !(value & signal->bit);
 
+	ret = regmap_read(sky1_src->regmap, signal->offset, &value);
+	if (ret)
+		return ret;
+
+	return !(value & signal->bit);
 }
 static const struct sky1_src_variant variant_sky1 = {
 	.signals = sky1_src_signals,
@@ -345,7 +356,14 @@ static int sky1_reset_probe(struct platform_device *pdev)
 	struct resource *res;
 	void __iomem *base;
 	const struct sky1_src_variant *variant = device_get_match_data(dev);
-	struct regmap_config config = {
+	struct regmap_config config;
+
+	if (!variant) {
+		dev_err(dev, "No match data for reset controller\n");
+		return -ENODEV;
+	}
+
+	config = (struct regmap_config){
 		.reg_bits = 32,
 		.val_bits = 32,
 		.reg_stride = 4,

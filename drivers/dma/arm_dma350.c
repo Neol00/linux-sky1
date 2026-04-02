@@ -1258,10 +1258,14 @@ static int arm_dma350_probe(struct platform_device *op)
 
 	d->regmap = device_syscon_regmap_lookup_by_property(&op->dev,
 							    "arm,remote-ctrl");
-	if (PTR_ERR(d->regmap) == -ENODEV)
-		d->regmap = NULL;
-	else if (IS_ERR(d->regmap))
-		return PTR_ERR(d->regmap);
+	if (IS_ERR(d->regmap)) {
+		if (PTR_ERR(d->regmap) == -ENODEV || PTR_ERR(d->regmap) == -ENOENT) {
+			dev_info(&op->dev, "no remote-ctrl syscon, local DMA mode\n");
+			d->regmap = NULL;
+		} else {
+			return PTR_ERR(d->regmap);
+		}
+	}
 
 	ret = dma_set_mask_and_coherent(&op->dev, DMA_BIT_MASK(32));
 	if (ret) {

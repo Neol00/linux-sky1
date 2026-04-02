@@ -342,6 +342,12 @@ static void *scmi_base_fill_custom_report(const struct scmi_protocol_handle *ph,
 	r->agent_id = le32_to_cpu(p->agent_id);
 	r->fatal = IS_FATAL_ERROR(le32_to_cpu(p->error_status));
 	r->cmd_count = ERROR_CMD_COUNT(le32_to_cpu(p->error_status));
+	if (r->cmd_count > SCMI_BASE_MAX_CMD_ERR_COUNT)
+		r->cmd_count = SCMI_BASE_MAX_CMD_ERR_COUNT;
+	if (payld_sz < sizeof(*p) - sizeof(p->msg_reports) +
+	    r->cmd_count * sizeof(__le64))
+		r->cmd_count = (payld_sz - offsetof(typeof(*p), msg_reports)) /
+			       sizeof(__le64);
 	for (i = 0; i < r->cmd_count; i++)
 		r->reports[i] = le64_to_cpu(p->msg_reports[i]);
 	*src_id = 0;

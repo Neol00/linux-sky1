@@ -22,9 +22,16 @@ static inline void linlondp_write32(u32 __iomem *base, u32 offset, u32 v)
 static inline void linlondp_write64(u32 __iomem *base, u32 offset, u64 v)
 {
 	writel(lower_32_bits(v), (base + (offset >> 2)));
+	/* Ensure low word is written before high word for DMA pointer safety */
+	wmb();
 	writel(upper_32_bits(v), (base + (offset >> 2) + 1));
 }
 
+/*
+ * NOTE: linlondp_write32_mask performs a non-atomic read-modify-write.
+ * Callers must ensure serialization when the same register can be
+ * accessed from multiple contexts (e.g., IRQ and process context).
+ */
 static inline void linlondp_write32_mask(u32 __iomem *base, u32 offset, u32 m,
 					 u32 v)
 {

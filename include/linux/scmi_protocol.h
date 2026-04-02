@@ -987,6 +987,7 @@ void scmi_driver_unregister(struct scmi_driver *driver);
 int scmi_device_opp_table_parse(struct device *dev);
 unsigned long scmi_device_get_freq(struct device *dev);
 int scmi_device_set_freq(struct device *dev, unsigned long freq);
+int scmi_device_get_domain_id(struct device *dev);
 #endif
 #else
 static inline int
@@ -1009,6 +1010,11 @@ unsigned long scmi_device_get_freq(struct device *dev)
 }
 
 int scmi_device_set_freq(struct device *dev, unsigned long freq)
+{
+	return -EINVAL;
+}
+
+int scmi_device_get_domain_id(struct device *dev)
 {
 	return -EINVAL;
 }

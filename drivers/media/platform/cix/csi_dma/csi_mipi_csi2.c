@@ -333,34 +333,6 @@ static int mipi_csi2_s_power(struct v4l2_subdev *sd, int on)
 	return v4l2_subdev_call(sen_sd, core, s_power, on);
 }
 
-static int
-mipi_csi2_g_frame_interval(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_frame_interval *interval)
-{
-	struct csi2rx_priv *csi2rx = v4l2_subdev_to_csi2rx(sd);
-	struct v4l2_subdev *sen_sd;
-
-	sen_sd = cix_get_remote_subdev(csi2rx, __func__);
-	if (!sen_sd)
-		return -EINVAL;
-
-	return v4l2_subdev_call(sen_sd, video, g_frame_interval, interval);
-}
-
-static int
-mipi_csi2_s_frame_interval(struct v4l2_subdev *sd,
-			   struct v4l2_subdev_frame_interval *interval)
-{
-	struct csi2rx_priv *csi2rx = v4l2_subdev_to_csi2rx(sd);
-	struct v4l2_subdev *sen_sd;
-
-	sen_sd = cix_get_remote_subdev(csi2rx, __func__);
-	if (!sen_sd)
-		return -EINVAL;
-
-	return v4l2_subdev_call(sen_sd, video, s_frame_interval, interval);
-}
-
 void mipi_csi2_enable_irq(struct csi2rx_priv *csi2rx)
 {
 	u32 val;
@@ -878,9 +850,7 @@ static const struct v4l2_subdev_core_ops mipi_csi2_core_ops = {
 };
 
 static const struct v4l2_subdev_video_ops mipi_csi2_video_ops = {
-	.g_frame_interval = mipi_csi2_g_frame_interval,
 	.s_stream = mipi_csi2_s_stream,
-	.s_frame_interval = mipi_csi2_s_frame_interval,
 };
 
 static const struct v4l2_subdev_ops mipi_csi2_subdev_ops = {
@@ -947,11 +917,11 @@ static int mipi_csi2_parse(struct csi2rx_priv *csi2rx)
 		dev_err(dev, "failed to install irq (%d)\n", ret);
 
 	if (has_acpi_companion(dev)) {
-		ret = device_property_read_u8(dev, CIX_MIPI_CSI2_OF_NODE_NAME,
+		ret = device_property_read_u8(dev, CIX_MIPI_CSI2_HW_OF_NODE_NAME,
 					      &csi2rx->id);
 	} else {
 		ret = csi2rx->id = of_alias_get_id(csi2rx->pdev->dev.of_node,
-						   CIX_MIPI_CSI2_OF_NODE_NAME);
+						   CIX_MIPI_CSI2_HW_OF_NODE_NAME);
 	}
 	if ((ret < 0) || (csi2rx->id >= CIX_MIPI_MAX_DEVS)) {
 		dev_err(dev, "invalid mipi device id (%d)\n", csi2rx->id);

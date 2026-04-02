@@ -9,6 +9,7 @@
  * Author: Linus Walleij <linus.walleij@linaro.org>
  */
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/pinctrl/devinfo.h>
 #include <linux/pinctrl/consumer.h>
@@ -46,21 +47,30 @@ int pinctrl_bind_pins(struct device *dev)
 		goto cleanup_get;
 	}
 
-	dev->pins->init_state = pinctrl_lookup_state(dev->pins->p,
-					PINCTRL_STATE_INIT);
-	if (IS_ERR(dev->pins->init_state)) {
-		/* Not supplying this state is perfectly legal */
-		dev_dbg(dev, "no init pinctrl state\n");
+	/*
+	 * On ACPI platforms, firmware already configured the pin mux.
+	 * Do not apply pinctrl state at probe — it can corrupt active
+	 * hardware (e.g. reconfiguring UART pins while earlycon is in use).
+	 * Just look up states for later use by PM suspend/resume.
+	 */
+	if (!has_acpi_companion(dev)) {
+		dev->pins->init_state = pinctrl_lookup_state(dev->pins->p,
+						PINCTRL_STATE_INIT);
+		if (IS_ERR(dev->pins->init_state)) {
+			/* Not supplying this state is perfectly legal */
+			dev_dbg(dev, "no init pinctrl state\n");
 
-		ret = pinctrl_select_state(dev->pins->p,
-					   dev->pins->default_state);
-	} else {
-		ret = pinctrl_select_state(dev->pins->p, dev->pins->init_state);
-	}
+			ret = pinctrl_select_state(dev->pins->p,
+						   dev->pins->default_state);
+		} else {
+			ret = pinctrl_select_state(dev->pins->p,
+						   dev->pins->init_state);
+		}
 
-	if (ret) {
-		dev_dbg(dev, "failed to activate initial pinctrl state\n");
-		goto cleanup_get;
+		if (ret) {
+			dev_dbg(dev, "failed to activate initial pinctrl state\n");
+			goto cleanup_get;
+		}
 	}
 
 #ifdef CONFIG_PM

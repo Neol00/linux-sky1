@@ -202,6 +202,15 @@ static void dp_layer_update_fb(struct linlondp_component *c,
 	linlondp_write32(reg, BLK_P0_STRIDE, fb->pitches[0] * block_h);
 	linlondp_write64(reg, BLK_P0_PTR_LOW, addr[0]);
 	linlondp_write32(reg, LAYER_FMT, kfb->format_caps->hw_id);
+
+	{
+		static unsigned long last_log;
+
+		if (printk_timed_ratelimit(&last_log, 600 * 1000))
+			DRM_INFO("layer_update_fb: addr=0x%llx stride=%d fmt=0x%x size=%dx%d\n",
+				 (u64)addr[0], fb->pitches[0], kfb->format_caps->hw_id,
+				 fb->width, fb->height);
+	}
 }
 
 static void dp_layer_disable(struct linlondp_component *c)
@@ -322,6 +331,15 @@ static void dp_layer_update(struct linlondp_component *c,
 	if (kfb->is_va && dp->integrates_tbu)
 		ctrl |= L_TBU_EN;
 	linlondp_write32_mask(reg, BLK_CONTROL, ctrl_mask, ctrl);
+
+	{
+		static unsigned long last_log;
+
+		if (printk_timed_ratelimit(&last_log, 600 * 1000))
+			DRM_INFO("layer_update: ctrl=0x%x size=%dx%d L_EN=%d TBU_EN=%d\n",
+				 ctrl, st->hsize, st->vsize,
+				 !!(ctrl & L_EN), !!(ctrl & L_TBU_EN));
+	}
 }
 
 static void dp_layer_dump(struct linlondp_component *c, struct seq_file *sf)
@@ -620,6 +638,8 @@ static void dp_component_disable(struct linlondp_component *c)
 	u32 i;
 
 	linlondp_write32(reg, BLK_CONTROL, 0);
+	/* Ensure control write completes before clearing inputs */
+	wmb();
 
 	for (i = 0; i < c->max_active_inputs; i++) {
 		linlondp_write32(reg, BLK_INPUT_ID0 + (i << 2), 0);
@@ -650,13 +670,16 @@ static void compiz_enable_input(u32 __iomem *id_reg, u32 __iomem *cfg_reg,
 
 	ctrl |= CU_INPUT_CTRL_ALPHA(cin->layer_alpha);
 
-	linlondp_write32(id_reg, BLK_INPUT_ID0, input_hw_id);
-
+	/* Write config registers before enabling the input ID */
 	linlondp_write32(cfg_reg, CU_INPUT0_SIZE,
 			 HV_SIZE(cin->hsize, cin->vsize));
 	linlondp_write32(cfg_reg, CU_INPUT0_OFFSET,
 			 HV_OFFSET(cin->hoffset, cin->voffset));
 	linlondp_write32(cfg_reg, CU_INPUT0_CONTROL, ctrl);
+
+	/* Enable input last so HW sees valid config */
+	wmb();
+	linlondp_write32(id_reg, BLK_INPUT_ID0, input_hw_id);
 }
 
 static void dp_compiz_update(struct linlondp_component *c,

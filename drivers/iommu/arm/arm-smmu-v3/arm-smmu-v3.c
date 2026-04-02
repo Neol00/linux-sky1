@@ -106,7 +106,7 @@ int unregister_smmu_attach_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_smmu_attach_notifier);
 
-int smmu_attach_notifier_call_chain(unsigned long val, void *data)
+static int smmu_attach_notifier_call_chain(unsigned long val, void *data)
 {
 	return blocking_notifier_call_chain(&smmu_attach_chain_head, val, data);
 }
@@ -123,7 +123,7 @@ int unregister_smmu_probe_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_smmu_probe_notifier);
 
-int smmu_probe_notifier_call_chain(unsigned long val, void *data)
+static int smmu_probe_notifier_call_chain(unsigned long val, void *data)
 {
 	return blocking_notifier_call_chain(&smmu_probe_chain_head, val, data);
 }

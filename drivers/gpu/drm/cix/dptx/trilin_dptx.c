@@ -118,7 +118,6 @@ static void trilin_link_rate_update(struct trilin_dp *dp, u32 reg)
 	union phy_configure_opts opts = { 0 };
 	struct trilin_phy_t *phy = &dp->phy;
 	u8 lanes, max_lanes = dp->link_config.max_lanes;
-	int ret;
 
 	if (IS_ERR_OR_NULL(phy->base)) {
 		lanes = max_lanes;
@@ -134,7 +133,7 @@ static void trilin_link_rate_update(struct trilin_dp *dp, u32 reg)
 	opts.dp.set_rate = 1;
 
 	if (phy->phy_ops)
-		ret = phy->phy_ops->configure(dp, &opts);
+		phy->phy_ops->configure(dp, &opts);
 }
 
 /**
@@ -308,7 +307,7 @@ static void trilin_dp_adjust_train(struct trilin_dp *dp,
 
 static int trilin_dp_update_vs_emph_phy_config(struct trilin_dp *dp)
 {
-	int ret;
+	int ret = 0;
 	u8 train;
 	union phy_configure_opts opts = { 0 };
 	struct trilin_phy_t *phy = &dp->phy;
@@ -692,7 +691,7 @@ end:
  *
  * Train the link by downshifting the link rate if training is not successful.
  */
-int trilin_dp_train_loop(struct trilin_dp *dp)
+static int trilin_dp_train_loop(struct trilin_dp *dp)
 {
 	struct trilin_dp_mode *mode = &dp->mode;
 	u8 bw_cur, bw = mode->bw_code;
@@ -923,7 +922,7 @@ static void trilin_dp_aux_clk_divider(struct trilin_dp *dp)
 	if (!rate) {
 		rate = clk_get_rate(dp->dpsub->apb_clk) / (1000 * 1000);
 		if (!rate)
-			rate = 25; // fixed value
+			rate = TRILIN_DPTX_AUX_DIVIDER;
 
 		dp->aux_clock_divider = rate;
 	}
@@ -1026,10 +1025,13 @@ static void trilin_dp_mode_set_timing(struct trilin_dp *dp, int source,
 		data_control = 0x4;
 	}
 
-	DP_DEBUG(
-		"adjust_mode flags: 0x%0x lane_cnt=%d mode.lans=%d (htotal=%d vtotal=%d) data_control=0x%0x",
-		mode->flags, lane_cnt, dp->mode.lane_cnt, mode->htotal,
-		mode->vtotal, data_control);
+	DP_INFO(
+		"timing: flags=0x%x lane_cnt=%d htotal=%d vtotal=%d hdisplay=%d vdisplay=%d hsync_start=%d hsync_end=%d vsync_start=%d vsync_end=%d clock=%d data_ctl=0x%x",
+		mode->flags, lane_cnt, mode->htotal, mode->vtotal,
+		mode->hdisplay, mode->vdisplay,
+		mode->hsync_start, mode->hsync_end,
+		mode->vsync_start, mode->vsync_end,
+		mode->clock, data_control);
 
 	trilin_dp_write(dp, TRILIN_DPTX_SRC0_MAIN_STREAM_HTOTAL + regs_off,
 			mode->htotal);
@@ -1065,8 +1067,8 @@ static void trilin_dp_mode_set_timing(struct trilin_dp *dp, int source,
 	reg = (wpl + lane_cnt - 1) / lane_cnt;
 	trilin_dp_write(dp, TRILIN_DPTX_SRC0_USER_DATA_COUNT + regs_off, reg);
 
-	sec_data_window = (mode->htotal - mode->hdisplay) *
-			  (dp->mode.link_rate / 40) * 9 / mode->clock;
+	sec_data_window = (u32)((u64)(mode->htotal - mode->hdisplay) *
+			  (dp->mode.link_rate / 40) * 9 / mode->clock);
 	trilin_dp_write(dp, TRILIN_DPTX_SRC0_SECONDARY_DATA_WINDOW + regs_off,
 			sec_data_window);
 	trilin_dp_write(dp, TRILIN_DPTX_SRC0_DATA_CONTROL + regs_off,
@@ -1107,15 +1109,23 @@ static void trilin_dp_panel_config_msa(struct trilin_dp *dp,
 				link_rate);
 		trilin_dp_write(dp, TRILIN_DPTX_SRC0_MVID + regs_off,
 				pixel_rate);
-		audio_link_rate = trilin_dp_get_audio_clk_rate(dp);
-		if (audio_link_rate > 0) {
-			DP_INFO("Audio rate: %d /512=%d\n", audio_link_rate,
-				audio_link_rate / 512);
-			trilin_dp_write(dp, TRILIN_DPTX_SEC0_NAUD + regs_off,
-					link_rate);
-			trilin_dp_write(dp, TRILIN_DPTX_SEC0_MAUD + regs_off,
-					audio_link_rate / 1000);
-		}
+		DP_INFO("MSA sync: NVID=%d MVID=%d (link_rate=%d pixel_rate=%d) misc0=0x%x bpp=%d\n",
+			link_rate, pixel_rate, link_rate, pixel_rate,
+			conn->config.misc0, conn->config.bpp);
+	} else {
+		DP_INFO("MSA async mode: misc0=0x%x bpp=%d pixel_rate=%d bw_code=0x%x\n",
+			conn->config.misc0, conn->config.bpp, pixel_rate,
+			dp->mode.bw_code);
+	}
+
+	audio_link_rate = trilin_dp_get_audio_clk_rate(dp);
+	if (audio_link_rate > 0) {
+		DP_INFO("Audio rate: %d /512=%d\n", audio_link_rate,
+			audio_link_rate / 512);
+		trilin_dp_write(dp, TRILIN_DPTX_SEC0_NAUD + regs_off,
+				link_rate);
+		trilin_dp_write(dp, TRILIN_DPTX_SEC0_MAUD + regs_off,
+				audio_link_rate / 1000);
 	}
 }
 
@@ -1290,7 +1300,12 @@ bool trilin_dp_wait_psr_status_ready(struct trilin_dp *dp, bool psr_enable)
 	u8 psr_status;
 
 	while (true) {
-		drm_dp_dpcd_readb(&dp->aux, DP_PSR_STATUS, &psr_status);
+		int ret = drm_dp_dpcd_readb(&dp->aux, DP_PSR_STATUS, &psr_status);
+
+		if (ret < 0) {
+			DP_ERR("DPCD read failed during PSR wait: %d\n", ret);
+			return false;
+		}
 		if (psr_enable && psr_status == DP_PSR_SINK_ACTIVE_RFB) {
 			DP_DEBUG("enable psr waiting psr_status=%s time=%dms"
 				, "DP_PSR_SINK_ACTIVE_RFB0", i);
@@ -1579,6 +1594,10 @@ static void trilin_dp_set_vc_payload_table(struct trilin_dp *dp,
 					   uint32_t source_id, uint32_t start,
 					   uint32_t slot_count)
 {
+	if (source_id >= 32) {
+		DP_ERR("Invalid source_id: %u\n", source_id);
+		return;
+	}
 	trilin_dp_write(dp, TRILIN_DPTX_MST_PID_TABLE_INDEX, start);
 	for (uint32_t i = 0; i < slot_count; i++) {
 		trilin_dp_write(dp, TRILIN_DPTX_MST_PID_TABLE_ENTRY,
@@ -1664,7 +1683,7 @@ int trilin_dp_panel_setup_hdr_sdp(struct trilin_dp *dp,
 	return 0;
 }
 
-void trilin_dp_panel_hw_cfg(struct trilin_dp *dp,
+static void trilin_dp_panel_hw_cfg(struct trilin_dp *dp,
 			    struct trilin_dp_panel *dp_panel)
 {
 	struct trilin_connector *conn = dp_panel->connector;
@@ -1876,6 +1895,18 @@ end:
 
 	DP_INFO("trilin_dp_encoder_enable stream_id=%d, active_stream_cnt:%d\n",
 		dp_panel->stream_id, dp->active_stream_cnt);
+
+	/* Diagnostic: read back DPCD link status after stream on */
+	{
+		u8 link_status[6] = {0};
+		int r = drm_dp_dpcd_read(&dp->aux, DP_LANE0_1_STATUS, link_status, 6);
+		DP_INFO("DPCD link status after stream_on (r=%d): %02x %02x %02x %02x %02x %02x\n",
+			r, link_status[0], link_status[1], link_status[2],
+			link_status[3], link_status[4], link_status[5]);
+		DP_INFO("stream_on: bw_code=0x%x lane_cnt=%d pclock=%d mvid_read=0x%x\n",
+			dp->mode.bw_code, dp->mode.lane_cnt, dp->mode.pclock,
+			trilin_dp_read(dp, TRILIN_DPTX_SRC0_MVID + regs_off));
+	}
 
 	return rc;
 }
@@ -2102,7 +2133,8 @@ static int trilin_dp_core_on(struct trilin_dp *dp, bool shallow)
 			dp->mode.link_rate, dp->mode.lane_cnt, fast_train_success ? "[use fast training]" : "");
 	else {
 		rc = 0;
-		DP_DEBUG("train failed but GO ON");
+		DP_WARN("link training failed but continuing (rate:%d lanes:%d)\n",
+			dp->mode.link_rate, dp->mode.lane_cnt);
 	}
 
 	DP_DEBUG("Trilinear DPTX %x with %u lanes, platform id %d\n",
@@ -2332,7 +2364,7 @@ static int trilin_dp_clear_info(struct trilin_dp *dp,
  * host state manager
  *
  */
-static void trilin_dp_register_phy(struct trilin_dp *dp)
+static int trilin_dp_register_phy(struct trilin_dp *dp)
 {
 	struct trilin_phy_t *phy = &dp->phy;
 	struct fwnode_handle *fwnode;
@@ -2345,6 +2377,19 @@ static void trilin_dp_register_phy(struct trilin_dp *dp)
 				phy->base = devm_phy_optional_get(
 					to_acpi_device_node(fwnode)->dev.parent,
 					fwnode_get_name(fwnode));
+				if (IS_ERR(phy->base)) {
+					int ret = PTR_ERR(phy->base);
+					phy->base = NULL;
+					if (ret == -EPROBE_DEFER) {
+						DP_INFO("dp_phy not ready, deferring probe\n");
+						return ret;
+					}
+				}
+				/* PHY fwnode found but provider not registered yet */
+				if (!phy->base) {
+					DP_INFO("dp_phy not available, deferring probe\n");
+					return -EPROBE_DEFER;
+				}
 			} else {
 				phy->base = NULL;
 			}
@@ -2358,6 +2403,7 @@ static void trilin_dp_register_phy(struct trilin_dp *dp)
 		trilin_usbdp_phy_register(dp);
 		trilin_edp_phy_register(dp);
 	}
+	return 0;
 }
 
 static int reset_dp_and_reinit(struct trilin_dp *dp)
@@ -2381,7 +2427,9 @@ static int reset_dp_and_reinit(struct trilin_dp *dp)
 
 	usleep_range(100, 200);
 
-	trilin_dp_register_phy(dp);
+	rc = trilin_dp_register_phy(dp);
+	if (rc)
+		return rc;
 
 	/*reset hardware*/
 	trilin_dp_write(dp, TRILIN_DPTX_TRANSMITTER_ENABLE, 1);
@@ -2420,6 +2468,18 @@ int trilin_dp_host_init(struct trilin_dp *dp)
 		return rc;
 	}
 
+	/*
+	 * Do NOT call phy_ops->init() here. The prepare() in
+	 * reset_dp_and_reinit() already enables AUX lines which is
+	 * sufficient for EDID/DPCD reading during HPD handling.
+	 *
+	 * PHY init (which calls phy_power_on) must only happen once,
+	 * in core_on's prepare+init sequence. Calling it here would
+	 * increment the generic PHY power_count, causing core_on's
+	 * phy_power_on to be a no-op — the combo PHY would never be
+	 * re-initialized after prepare's reset of the DP PHY wrapper.
+	 */
+
 	if (dp->edp_panel) {
 		drm_panel_prepare(dp->edp_panel);
 		msleep(50);
@@ -2436,7 +2496,9 @@ static int trilin_dp_host_init_from_bootloader(struct trilin_dp *dp)
 {
 	int rc = 0;
 
-	trilin_dp_register_phy(dp);
+	rc = trilin_dp_register_phy(dp);
+	if (rc)
+		return rc;
 
 	dp->state |= DPTX_STATE_INITIALIZED;
 
@@ -2487,7 +2549,11 @@ static void trilin_dp_display_mst_init(struct trilin_dp *dp)
 	int ret, i = 0;
 
 	/* clear sink mst state */
-	drm_dp_dpcd_readb(&dp->aux, DP_MSTM_CTRL, &old_mstm_ctrl);
+	ret = drm_dp_dpcd_readb(&dp->aux, DP_MSTM_CTRL, &old_mstm_ctrl);
+	if (ret < 0) {
+		DP_ERR("Failed to read MSTM_CTRL: %d\n", ret);
+		return;
+	}
 	drm_dp_dpcd_writeb(&dp->aux, DP_MSTM_CTRL, 0);
 
 	/* add extra delay if MST state is not cleared */
@@ -2658,11 +2724,15 @@ static void trilin_dp_hpd_event_work_func(struct work_struct *work)
 			mode = phy_get_mode(phy->base);
 			if (mode == PHY_MODE_DP)
 				break;
-			DP_INFO("mode is not PHY_MODE_DP\n");
+			if (try == 0)
+				DP_ERR("phy mode is %d (expected %d/PHY_MODE_DP), phy=%px\n",
+					mode, PHY_MODE_DP, phy->base);
 			msleep(100);
 		}
-		if (try >= DP_HPD_MAX_TRIES)
-			DP_ERR("Wait too long for phy ready!\n");
+		if (try >= DP_HPD_MAX_TRIES) {
+			DP_ERR("Wait too long for phy ready! Forcing PHY_MODE_DP\n");
+			phy->base->attrs.mode = PHY_MODE_DP;
+		}
 	}
 
 	/* add force to detect to sync call detect. */
@@ -2713,8 +2783,45 @@ static void trilin_dp_hpd_irq_work_func(struct work_struct *work)
 
 	if (dp->link_request & DP_LINK_STATUS_UPDATED) {
 		mutex_lock(&dp->session_lock);
-		if (dp->state & DPTX_STATE_ENABLED)
-			trilin_dp_train_loop(dp);
+		if (dp->state & DPTX_STATE_ENABLED) {
+			int i, ret;
+
+			/* Disable video streams before retraining per DP spec.
+			 * Retraining with active video causes guaranteed failure.
+			 */
+			for (i = 0; i < DP_STREAM_MAX; i++) {
+				if (dp->active_panels[i]) {
+					u32 off = TRILIN_DPTX_SOURCE_OFFSET * i;
+
+					trilin_dp_write(dp,
+						TRILIN_DPTX_VIDEO_STREAM_ENABLE + off, 0);
+					trilin_dp_write(dp,
+						TRILIN_DPTX_SECONDARY_STREAM_ENABLE + off, 0);
+				}
+			}
+
+			ret = trilin_dp_train_loop(dp);
+
+			/* Re-enable video streams after retraining */
+			for (i = 0; i < DP_STREAM_MAX; i++) {
+				if (dp->active_panels[i]) {
+					u32 off = TRILIN_DPTX_SOURCE_OFFSET * i;
+
+					if (!ret) {
+						trilin_dp_panel_hw_cfg(dp,
+							dp->active_panels[i]);
+					}
+					trilin_dp_write(dp,
+						TRILIN_DPTX_VIDEO_STREAM_ENABLE + off, 1);
+					trilin_dp_write(dp,
+						TRILIN_DPTX_SECONDARY_STREAM_ENABLE + off, 1);
+				}
+			}
+			if (ret)
+				DP_ERR("link retrain failed (%d), stream may be corrupt\n", ret);
+			else
+				DP_INFO("link retrained successfully\n");
+		}
 		mutex_unlock(&dp->session_lock);
 	}
 	trilin_dp_link_hdcp_request(dp);
@@ -2967,7 +3074,11 @@ int trilin_dp_prepare(struct trilin_dp *dp)
 			goto end;
 		}
 	} else if (dp->state & DPTX_STATE_INIT_TRAIN){
-		reset_dp_and_reinit(dp); //enable dp reset...
+		rc = reset_dp_and_reinit(dp);
+		if (rc) {
+			DP_WARN("reset_dp_and_reinit failed");
+			goto end;
+		}
 		usleep_range(100, 200);
 	}
 
@@ -3141,6 +3252,12 @@ int trilin_dp_init_config(struct trilin_dp *dp)
 		goto end2;
 
 	DP_INFO("init hpd high is %d\n", trilin_dp_get_hpd_state(dp));
+
+	/* Schedule a delayed HPD check to catch connections that occur
+	 * after PHY init but before the interrupt handler is fully active.
+	 * This handles dedicated DP ports where HPD may take time to settle. */
+	schedule_delayed_work(&dp->hpd_event_work, msecs_to_jiffies(1000));
+
 	return rc;
 end2:
 	trilin_dp_aux_cleanup(dp);

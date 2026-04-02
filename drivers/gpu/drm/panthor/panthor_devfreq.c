@@ -63,16 +63,29 @@ static void panthor_devfreq_update_utilization(struct panthor_devfreq *pdevfreq)
 static int panthor_devfreq_target(struct device *dev, unsigned long *freq,
 				  u32 flags)
 {
+	struct panthor_device *ptdev = dev_get_drvdata(dev);
 	struct dev_pm_opp *opp;
 	int err;
 
 	opp = devfreq_recommended_opp(dev, freq, flags);
 	if (IS_ERR(opp))
 		return PTR_ERR(opp);
+
+	/*
+	 * Under ACPI, there are no Linux clocks — frequency scaling is done
+	 * via the SCMI perf domain's set_performance_state callback.
+	 * dev_pm_opp_set_opp() handles this path when no clock is set,
+	 * while dev_pm_opp_set_rate() requires a clock and would crash.
+	 */
+	if (!dev->of_node)
+		err = dev_pm_opp_set_opp(dev, opp);
+	else {
+		dev_pm_opp_put(opp);
+		err = dev_pm_opp_set_rate(dev, *freq);
+		return err;
+	}
+
 	dev_pm_opp_put(opp);
-
-	err = dev_pm_opp_set_rate(dev, *freq);
-
 	return err;
 }
 
@@ -117,7 +130,21 @@ static int panthor_devfreq_get_cur_freq(struct device *dev, unsigned long *freq)
 {
 	struct panthor_device *ptdev = dev_get_drvdata(dev);
 
-	*freq = clk_get_rate(ptdev->clks.core);
+	if (ptdev->clks.core)
+		*freq = clk_get_rate(ptdev->clks.core);
+	else {
+		/* ACPI: read frequency from the SCMI perf domain */
+		struct dev_pm_opp *opp;
+		unsigned long f = 0;
+
+		opp = dev_pm_opp_find_freq_ceil(dev, &f);
+		if (!IS_ERR(opp)) {
+			*freq = dev_pm_opp_get_freq(opp);
+			dev_pm_opp_put(opp);
+		} else {
+			*freq = 0;
+		}
+	}
 
 	return 0;
 }
@@ -182,7 +209,17 @@ int panthor_devfreq_init(struct panthor_device *ptdev)
 
 	panthor_devfreq_reset(pdevfreq);
 
-	cur_freq = clk_get_rate(ptdev->clks.core);
+	if (ptdev->clks.core)
+		cur_freq = clk_get_rate(ptdev->clks.core);
+	else {
+		/* ACPI: get the lowest OPP frequency as initial */
+		unsigned long f = 0;
+		struct dev_pm_opp *init_opp = dev_pm_opp_find_freq_ceil(dev, &f);
+		if (!IS_ERR(init_opp)) {
+			cur_freq = f;
+			dev_pm_opp_put(init_opp);
+		}
+	}
 
 	/* Regulator coupling only takes care of synchronizing/balancing voltage
 	 * updates, but the coupled regulator needs to be enabled manually.

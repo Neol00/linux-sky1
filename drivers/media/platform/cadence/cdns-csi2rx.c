@@ -32,12 +32,9 @@
 #define CSI2RX_DEVICE_CFG_REG			0x000
 
 #define CSI2RX_SOFT_RESET_REG			0x004
-#if CSI2RX_CIX_ENABLE
 #define CSI2RX_SOFT_RESET				BIT(0)
-#else
 #define CSI2RX_SOFT_RESET_PROTOCOL		BIT(1)
 #define CSI2RX_SOFT_RESET_FRONT			BIT(0)
-#endif
 
 #define CSI2RX_STATIC_CFG_REG			0x008
 #define CSI2RX_STATIC_CFG_DLANE_MAP(llane, plane)	((plane) << (16 + (llane) * 4))
@@ -101,15 +98,6 @@
 #define CSI2RX_ECC_ERRORS		GENMASK(7, 4)
 #define CSI2RX_PACKET_ERRORS		GENMASK(12, 9)
 
-enum csi2rx_pads {
-	CSI2RX_PAD_SINK,
-	CSI2RX_PAD_SOURCE_STREAM0,
-	CSI2RX_PAD_SOURCE_STREAM1,
-	CSI2RX_PAD_SOURCE_STREAM2,
-	CSI2RX_PAD_SOURCE_STREAM3,
-	CSI2RX_PAD_MAX,
-};
-
 struct csi2rx_fmt {
 	u32				code;
 	/* width of a single pixel on CSI-2 bus */
@@ -139,43 +127,6 @@ static const struct csi2rx_event csi2rx_events[] = {
 };
 
 #define CSI2RX_NUM_EVENTS		ARRAY_SIZE(csi2rx_events)
-
-struct csi2rx_priv {
-	struct device			*dev;
-	unsigned int			count;
-	int				error_irq;
-
-	/*
-	 * Used to prevent race conditions between multiple,
-	 * concurrent calls to start and stop.
-	 */
-	struct mutex			lock;
-
-	void __iomem			*base;
-	struct clk			*sys_clk;
-	struct clk			*p_clk;
-	struct clk			*pixel_clk[CSI2RX_STREAMS_MAX];
-	struct reset_control		*sys_rst;
-	struct reset_control		*p_rst;
-	struct reset_control		*pixel_rst[CSI2RX_STREAMS_MAX];
-	struct phy			*dphy;
-
-	u8				num_pixels[CSI2RX_STREAMS_MAX];
-	u8				lanes[CSI2RX_LANES_MAX];
-	u8				num_lanes;
-	u8				max_lanes;
-	u8				max_streams;
-	bool				has_internal_dphy;
-	u32				events[CSI2RX_NUM_EVENTS];
-
-	struct v4l2_subdev		subdev;
-	struct v4l2_async_notifier	notifier;
-	struct media_pad		pads[CSI2RX_PAD_MAX];
-
-	/* Remote source */
-	struct v4l2_subdev		*source_subdev;
-	int				source_pad;
-};
 
 static const struct csi2rx_fmt formats[] = {
 	{ .code	= MEDIA_BUS_FMT_YUYV8_1X16, .bpp = 16, .max_pixels = 2, },
@@ -365,7 +316,6 @@ int csi2rx_start(struct csi2rx_priv *csi2rx)
 		set_bit(idx, &lanes_used);
 		reg |= CSI2RX_STATIC_CFG_DLANE_MAP(i, i + 1);
 	}
-#endif
 	writel(reg, csi2rx->base + CSI2RX_STATIC_CFG_REG);
 
 	/* Enable DPHY clk and data lanes. */

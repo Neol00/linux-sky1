@@ -67,7 +67,7 @@ static void rx_callback(struct mbox_client *cl, void *m)
 	 */
 	if (cl->knows_txdone &&
 	    !core->shmem->channel_free(smbox->shmem)) {
-		dev_warn(smbox->cinfo->dev, "Ignoring spurious A2P IRQ !\n");
+		dev_dbg(smbox->cinfo->dev, "Ignoring spurious A2P IRQ !\n");
 		core->bad_message_trace(smbox->cinfo,
 			     core->shmem->read_header(smbox->shmem),
 							     MSG_MBOX_SPURIOUS);
@@ -376,7 +376,7 @@ static const struct scmi_transport_ops scmi_mailbox_ops = {
 
 static struct scmi_desc scmi_mailbox_desc = {
 	.ops = &scmi_mailbox_ops,
-	.max_rx_timeout_ms = 200, /* Increased for platforms with slower firmware */
+	.max_rx_timeout_ms = 500, /* Increased for CIX Sky1 and other platforms with slower firmware */
 	.max_msg = 20, /* Limited by MBOX_TX_QUEUE_LEN */
 	.max_msg_size = SCMI_SHMEM_MAX_PAYLOAD_SIZE,
 };

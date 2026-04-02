@@ -296,6 +296,11 @@ void linlondp_print_events(struct linlondp_events *evts,
 int linlondp_dev_resume(struct linlondp_dev *mdev);
 int linlondp_dev_suspend(struct linlondp_dev *mdev);
 
+int linlondp_atomic_replace_property_blob_from_id(
+	struct drm_device *dev, struct drm_property_blob **blob,
+	uint64_t blob_id, ssize_t expected_size, ssize_t expected_elem_size,
+	bool *replaced);
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
 struct fwnode_handle *
 fwnode_graph_get_remote_node(const struct fwnode_handle *fwnode, u32 port_id,

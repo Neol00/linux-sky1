@@ -1139,6 +1139,10 @@ static int udphy_dp_phy_set_voltages(struct cix_udphy *udphy,
 			dp->lanes, dp->voltage[0], dp->pre[0]);
 
 	index = dp->voltage[0] * 4 + dp->pre[0];
+	if (index >= ARRAY_SIZE(volt_cfg)) {
+		dev_err(udphy->dev, "voltage index %u out of bounds\n", index);
+		return -EINVAL;
+	}
 	switch (dp->lanes) {
 	case 1:
 		if (!udphy->flip) { // lane 2

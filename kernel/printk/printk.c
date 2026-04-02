@@ -2287,7 +2287,9 @@ int vprintk_store(int facility, int level,
 	u16 text_len;
 	int ret = 0;
 	u64 ts_nsec;
+#ifdef CONFIG_PLAT_PRINTK_EXT
 	char tmp_buf[100] = {'\0'};
+#endif
 	u16 tmp_len = 0;
 
 	if (!printk_enter_irqsave(recursion_ptr, irqflags))
@@ -4152,10 +4154,15 @@ void register_console(struct console *newcon)
 	 * If we have a bootconsole, and are switching to a real console,
 	 * don't print everything out again, since when the boot console, and
 	 * the real console are the same physical device, it's annoying to
-	 * see the beginning boot messages twice
+	 * see the beginning boot messages twice.
+	 *
+	 * Also suppress replay when another real console already registered
+	 * (e.g. tty1 registered first, unregistered the boot console, and
+	 * now ttyAMA2 registers — replaying to the same UART that the
+	 * earlycon already printed to causes duplicate output).
 	 */
-	if (bootcon_registered &&
-	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV)) {
+	if ((bootcon_registered || realcon_registered) &&
+	    !(newcon->flags & CON_BOOT)) {
 		newcon->flags &= ~CON_PRINTBUFFER;
 	}
 
@@ -4225,7 +4232,7 @@ void register_console(struct console *newcon)
 	 */
 	con_printk(KERN_INFO, newcon, "enabled\n");
 	if (bootcon_registered &&
-	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV) &&
+	    !(newcon->flags & CON_BOOT) &&
 	    !keep_bootcon) {
 		struct hlist_node *tmp;
 

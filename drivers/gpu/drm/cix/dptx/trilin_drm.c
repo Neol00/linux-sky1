@@ -671,6 +671,7 @@ static void trilin_dp_encoder_enable(struct drm_encoder *encoder,
 	rc = trilin_dp_enable(dp, dp_panel);
 	if (rc) {
 		DP_ERR("DP display enable failed, rc=%d\n", rc);
+		trilin_dp_unprepare(dp);
 		return;
 	}
 	/*update hdr and hdcp ? */
@@ -695,6 +696,8 @@ static void trilin_dp_encoder_disable(struct drm_encoder *encoder,
 	crtc = get_crtc_from_encoder(encoder, state);
 	if (crtc)
 		new_crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	else
+		new_crtc_state = NULL;
 
 	/* Don't do a full disable on PSR transitions */
 	if (new_crtc_state && new_crtc_state->self_refresh_active) {
@@ -993,7 +996,7 @@ int trilin_dp_encoder_compute_config(struct drm_encoder *encoder,
 	return 0;
 }
 
-int trilin_dp_encoder_atomic_check(struct drm_encoder *encoder,
+static int trilin_dp_encoder_atomic_check(struct drm_encoder *encoder,
 				  struct drm_crtc_state *crtc_state,
 				  struct drm_connector_state *connector_state)
 {
@@ -1202,7 +1205,9 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 
 	drm_encoder_helper_add(encoder, &trilin_dp_encoder_helper_funcs);
 
-	connector->polled = DRM_CONNECTOR_POLL_HPD;
+	connector->polled = DRM_CONNECTOR_POLL_HPD |
+			    DRM_CONNECTOR_POLL_CONNECT |
+			    DRM_CONNECTOR_POLL_DISCONNECT;
 	if (dp->edp_panel)
 		drm_mode_connector = DRM_MODE_CONNECTOR_eDP;
 
@@ -1232,6 +1237,10 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	drm_atomic_helper_connector_reset(connector);
 	trilin_dp_add_properties(dp, connector);
 	//dp hardware init now
-	trilin_dp_init_config(dp);
-	return 0;
+	ret = trilin_dp_init_config(dp);
+	if (ret) {
+		drm_connector_cleanup(connector);
+		drm_encoder_cleanup(encoder);
+	}
+	return ret;
 }

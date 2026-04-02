@@ -18,6 +18,9 @@
 #ifdef CONFIG_ARCH_CIX
 #include "./cix/clk.h"
 #include "./cix/acpi_clk.h"
+#include <linux/arm-smccc.h>
+#include <linux/io.h>
+#include <linux/delay.h>
 #endif
 
 #define NOT_ATOMIC	false
@@ -57,6 +60,11 @@ static unsigned long scmi_clk_recalc_rate(struct clk_hw *hw,
 	ret = scmi_proto_clk_ops->rate_get(clk->ph, clk->id, &rate);
 	if (ret)
 		return 0;
+	/* Log audio clock readbacks (IDs 70-71, 76-79) */
+	if ((clk->id >= 70 && clk->id <= 71) ||
+	    (clk->id >= 76 && clk->id <= 79))
+		dev_dbg(clk->dev, "SCMI clk[%d] '%s' recalc_rate = %llu\n",
+			 clk->id, clk_hw_get_name(hw), rate);
 	return rate;
 }
 
@@ -74,6 +82,19 @@ static int scmi_clk_determine_rate(struct clk_hw *hw,
 	 */
 	if (clk->info->rate_discrete)
 		return 0;
+
+#ifdef CONFIG_ARCH_CIX
+	/*
+	 * CIX Sky1 SCP firmware returns malformed CLOCK_DESCRIBE_RATES
+	 * triplets (the quirk_clock_rates_triplet_out_of_spec already
+	 * patches the count, but the rate values themselves are unreliable).
+	 * Clamping to this broken range prevents rate changes entirely —
+	 * the CCF sees new_rate == cached_rate and skips the set_rate call.
+	 * Bypass range clamping and let the firmware decide; recalc_rate
+	 * will read back the actual hardware rate afterwards.
+	 */
+	return 0;
+#endif
 
 	fmin = clk->info->range.min_rate;
 	fmax = clk->info->range.max_rate;
@@ -96,12 +117,139 @@ static int scmi_clk_determine_rate(struct clk_hw *hw,
 	return 0;
 }
 
+#ifdef CONFIG_ARCH_CIX
+/*
+ * CIX Sky1 SCMI-over-SMC clock rate set.
+ *
+ * The SCP firmware exposes two SCMI transport channels:
+ *   - Mailbox (0x065d0000): used by ACPI methods for clock/perf protocols
+ *   - SMC (shmem 0x84380000, func 0xc2000001): used by DT for power domains
+ *
+ * On ACPI-only boots the mailbox transport silently accepts CLOCK_RATE_SET
+ * but never actually reprograms the PLLs — every clock reads back its boot
+ * default (800 MHz).  Sending the same SCMI message via the SMC transport
+ * reaches the correct SCP agent and the rate change takes effect.
+ *
+ * This fallback is used when the mailbox set_rate returns success but
+ * recalc_rate shows the rate did not change.
+ */
+#define CIX_SMC_SCMI_FUNC_ID		0xc2000001UL
+#define CIX_SMC_SCMI_SHMEM_PHYS	0x84380000UL
+#define CIX_SMC_SCMI_SHMEM_SIZE	0x80
+
+#define CIX_SHMEM_CHAN_STATUS	0x04
+#define CIX_SHMEM_FLAGS		0x10
+#define CIX_SHMEM_LENGTH	0x14
+#define CIX_SHMEM_MSG_HEADER	0x18
+#define CIX_SHMEM_MSG_PAYLOAD	0x1c
+#define CIX_SHMEM_CHAN_FREE	BIT(0)
+
+#define CIX_SCMI_HDR(proto, msg) \
+	(((msg) & 0xFF) | (((proto) & 0xFF) << 10))
+
+static DEFINE_MUTEX(cix_smc_scmi_lock);
+
+static int cix_smc_scmi_clock_rate_set(struct device *dev,
+				       u32 clk_id, u64 rate)
+{
+	void __iomem *shmem;
+	struct arm_smccc_res res;
+	u32 status;
+	int timeout;
+
+	shmem = ioremap(CIX_SMC_SCMI_SHMEM_PHYS, CIX_SMC_SCMI_SHMEM_SIZE);
+	if (!shmem)
+		return -ENOMEM;
+
+	mutex_lock(&cix_smc_scmi_lock);
+
+	timeout = 1000;
+	while (timeout-- > 0) {
+		if (ioread32(shmem + CIX_SHMEM_CHAN_STATUS) & CIX_SHMEM_CHAN_FREE)
+			break;
+		udelay(10);
+	}
+	if (timeout <= 0) {
+		mutex_unlock(&cix_smc_scmi_lock);
+		iounmap(shmem);
+		return -EBUSY;
+	}
+
+	iowrite32(0, shmem + CIX_SHMEM_CHAN_STATUS);
+	iowrite32(0, shmem + CIX_SHMEM_FLAGS);
+	/* Length = header(4) + payload(16): flags + id + rate_lo + rate_hi */
+	iowrite32(20, shmem + CIX_SHMEM_LENGTH);
+	/* protocol 0x14 = CLOCK, message 0x05 = CLOCK_RATE_SET */
+	iowrite32(CIX_SCMI_HDR(0x14, 0x05), shmem + CIX_SHMEM_MSG_HEADER);
+	/* Payload: flags(sync=0), clk_id, rate_low, rate_high */
+	iowrite32(0, shmem + CIX_SHMEM_MSG_PAYLOAD);
+	iowrite32(clk_id, shmem + CIX_SHMEM_MSG_PAYLOAD + 4);
+	iowrite32((u32)(rate & 0xFFFFFFFF), shmem + CIX_SHMEM_MSG_PAYLOAD + 8);
+	iowrite32((u32)(rate >> 32), shmem + CIX_SHMEM_MSG_PAYLOAD + 12);
+
+	arm_smccc_smc(CIX_SMC_SCMI_FUNC_ID,
+		      CIX_SMC_SCMI_SHMEM_PHYS >> 12, 0,
+		      0, 0, 0, 0, 0, &res);
+
+	status = ioread32(shmem + CIX_SHMEM_MSG_PAYLOAD);
+	iowrite32(CIX_SHMEM_CHAN_FREE, shmem + CIX_SHMEM_CHAN_STATUS);
+
+	mutex_unlock(&cix_smc_scmi_lock);
+	iounmap(shmem);
+
+	if (res.a0) {
+		dev_dbg(dev, "SMC SCMI transport error: a0=0x%lx\n", res.a0);
+		return -EIO;
+	}
+	if (status != 0) {
+		dev_dbg(dev, "SMC CLOCK_RATE_SET(clk %u, %llu): SCMI err 0x%x\n",
+			clk_id, rate, status);
+		return -EIO;
+	}
+	return 0;
+}
+#endif /* CONFIG_ARCH_CIX */
+
 static int scmi_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 			     unsigned long parent_rate)
 {
 	struct scmi_clk *clk = to_scmi_clk(hw);
+	int ret;
+	u64 actual;
 
-	return scmi_proto_clk_ops->rate_set(clk->ph, clk->id, rate);
+	/* Try the normal mailbox transport first */
+	ret = scmi_proto_clk_ops->rate_set(clk->ph, clk->id, rate);
+
+#ifdef CONFIG_ARCH_CIX
+	/*
+	 * CIX quirk: the mailbox transport returns success but the SCP
+	 * does not actually change the PLL rate.  Detect this by reading
+	 * back, and fall back to the SMC transport which reaches the
+	 * correct SCP agent.
+	 */
+	if (ret == 0) {
+		int rret = scmi_proto_clk_ops->rate_get(clk->ph, clk->id,
+							&actual);
+		if (rret == 0 && actual != (u64)rate) {
+			ret = cix_smc_scmi_clock_rate_set(clk->dev,
+							  clk->id, rate);
+			if (ret == 0) {
+				dev_info(clk->dev,
+					 "SCMI clk[%d] '%s' set_rate(%lu) via SMC OK\n",
+					 clk->id, clk_hw_get_name(hw), rate);
+				return 0;
+			}
+			/* SMC failed, not fatal — log and continue */
+			dev_dbg(clk->dev,
+				"SCMI clk[%d] '%s' SMC fallback failed (%d)\n",
+				clk->id, clk_hw_get_name(hw), ret);
+			ret = 0; /* mailbox said OK, don't error out */
+		}
+	}
+#endif
+	dev_dbg(clk->dev, "SCMI clk[%d] '%s' set_rate(%lu) = %d\n",
+		 clk->id, clk_hw_get_name(hw), rate, ret);
+	return ret;
 }
 
 static int scmi_clk_set_parent(struct clk_hw *hw, u8 parent_index)
@@ -266,7 +414,15 @@ static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk,
 		max_rate = sclk->info->range.max_rate;
 	}
 
+#ifdef CONFIG_ARCH_CIX
+	/*
+	 * Skip setting rate range for CIX — the SCMI DESCRIBE_RATES triplet
+	 * is unreliable and a broken min > max range causes clk_set_rate to
+	 * fail with -EINVAL before even reaching the driver callbacks.
+	 */
+#else
 	clk_hw_set_rate_range(&sclk->hw, min_rate, max_rate);
+#endif
 	return ret;
 }
 
@@ -316,8 +472,12 @@ scmi_clk_ops_alloc(struct device *dev, unsigned long feats_key)
 	/* Rate ops */
 	ops->recalc_rate = scmi_clk_recalc_rate;
 	ops->determine_rate = scmi_clk_determine_rate;
-	if (feats_key & BIT(SCMI_CLK_RATE_CTRL_SUPPORTED))
-		ops->set_rate = scmi_clk_set_rate;
+	/*
+	 * Always expose set_rate.  Some SCP firmware (e.g. CIX Sky1) supports
+	 * rate control but does not advertise SCMI_CLK_RATE_CTRL_SUPPORTED,
+	 * causing audio PLL clocks to be stuck at their initial rate.
+	 */
+	ops->set_rate = scmi_clk_set_rate;
 
 	/* Parent ops */
 	ops->get_parent = scmi_clk_get_parent;

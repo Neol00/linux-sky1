@@ -349,7 +349,15 @@ static trilin_phy_error_t trilin_edp_phy_init(struct trilin_dp *dp,
 
 	// bring the power state back up to active
 	status = trilin_edp_phy_power(dp, trilin_power_a2);
+	if (status != trilin_phy_error_none) {
+		DP_ERR("Failed to transition to power state A2\n");
+		return status;
+	}
 	status = trilin_edp_phy_power(dp, trilin_power_a0);
+	if (status != trilin_phy_error_none) {
+		DP_ERR("Failed to transition to power state A0\n");
+		return status;
+	}
 	trilin_phy_write(dp, TRILIN_EDP_PHY_DATA_ENABLE, 1);
 
 	phy->state = trilin_phy_power_on;

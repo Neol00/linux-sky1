@@ -110,7 +110,7 @@ void acpi_set_fw_sleep_ops(const struct acpi_fw_sleep_ops *ops)
 	mutex_unlock(&fw_sleep_ops_lock);
 }
 
-acpi_status acpi_enter_sleep_state_toplevel(u8 acpi_state)
+static acpi_status acpi_enter_sleep_state_toplevel(u8 acpi_state)
 {
 	if (fw_sleep_ops && fw_sleep_ops->enter)
 		return fw_sleep_ops->enter(acpi_state);

@@ -42,6 +42,8 @@ struct dma_heap_export_info {
 
 void *dma_heap_get_drvdata(struct dma_heap *heap);
 
+struct device *dma_heap_get_dev(struct dma_heap *heap);
+
 const char *dma_heap_get_name(struct dma_heap *heap);
 
 struct dma_heap *dma_heap_add(const struct dma_heap_export_info *exp_info);

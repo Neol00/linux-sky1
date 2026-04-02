@@ -1346,7 +1346,7 @@ MODULE_ALIAS("platform:armchina");
 MODULE_DESCRIPTION("Arm China ispmem driver");
 MODULE_LICENSE("GPL v2");
 #else
-MODULE_IMPORT_NS(DMA_BUF);
+MODULE_IMPORT_NS("DMA_BUF");
 static void *g_instance;
 
 void *armcb_get_cam_io_drv_instance(void)

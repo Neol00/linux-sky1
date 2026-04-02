@@ -55,35 +55,42 @@ static int panthor_gpu_coherency_init(struct panthor_device *ptdev)
 
 static int panthor_clk_init(struct panthor_device *ptdev)
 {
-	ptdev->clks.core = devm_clk_get(ptdev->base.dev, "gpu_clk_core");
+	struct device *dev = ptdev->base.dev;
+
+	/*
+	 * Under ACPI, clocks are managed by the SCMI firmware — there are
+	 * no Linux clock framework clocks.  Leave all clk pointers NULL;
+	 * clk_prepare_enable(NULL) and clk_get_rate(NULL) are safe no-ops.
+	 */
+	if (!dev->of_node) {
+		drm_info(&ptdev->base, "ACPI mode: clocks managed by SCMI\n");
+		return 0;
+	}
+
+	ptdev->clks.core = devm_clk_get(dev, "gpu_clk_core");
 	if (IS_ERR(ptdev->clks.core))
-		return dev_err_probe(ptdev->base.dev,
-				     PTR_ERR(ptdev->clks.core),
+		return dev_err_probe(dev, PTR_ERR(ptdev->clks.core),
 				     "get 'core' clock failed");
 
-	ptdev->clks.stacks = devm_clk_get(ptdev->base.dev, "gpu_clk_stacks");
+	ptdev->clks.stacks = devm_clk_get(dev, "gpu_clk_stacks");
 	if (IS_ERR(ptdev->clks.stacks))
-		return dev_err_probe(ptdev->base.dev,
-				     PTR_ERR(ptdev->clks.stacks),
+		return dev_err_probe(dev, PTR_ERR(ptdev->clks.stacks),
 				     "get 'stacks' clock failed");
 
-	ptdev->clks.coregroup = devm_clk_get_optional(ptdev->base.dev, "coregroup");
+	ptdev->clks.coregroup = devm_clk_get_optional(dev, "coregroup");
 	if (IS_ERR(ptdev->clks.coregroup))
-		return dev_err_probe(ptdev->base.dev,
-				     PTR_ERR(ptdev->clks.coregroup),
+		return dev_err_probe(dev, PTR_ERR(ptdev->clks.coregroup),
 				     "get 'coregroup' clock failed");
 
 	/* CIX SKY1 needs additional backup clocks */
-	ptdev->clks.backup[0] = devm_clk_get_optional(ptdev->base.dev, "gpu_clk_200M");
+	ptdev->clks.backup[0] = devm_clk_get_optional(dev, "gpu_clk_200M");
 	if (IS_ERR(ptdev->clks.backup[0]))
-		return dev_err_probe(ptdev->base.dev,
-				     PTR_ERR(ptdev->clks.backup[0]),
+		return dev_err_probe(dev, PTR_ERR(ptdev->clks.backup[0]),
 				     "get 'gpu_clk_200M' clock failed");
 
-	ptdev->clks.backup[1] = devm_clk_get_optional(ptdev->base.dev, "gpu_clk_400M");
+	ptdev->clks.backup[1] = devm_clk_get_optional(dev, "gpu_clk_400M");
 	if (IS_ERR(ptdev->clks.backup[1]))
-		return dev_err_probe(ptdev->base.dev,
-				     PTR_ERR(ptdev->clks.backup[1]),
+		return dev_err_probe(dev, PTR_ERR(ptdev->clks.backup[1]),
 				     "get 'gpu_clk_400M' clock failed");
 
 	drm_info(&ptdev->base, "clock rate = %lu\n", clk_get_rate(ptdev->clks.core));
@@ -151,43 +158,42 @@ static int panthor_pm_domain_init(struct panthor_device *ptdev)
 			}
 		}
 	} else {
-		ptdev->pm_domain_devs[1] = dev_pm_domain_attach_by_name(ptdev->base.dev, "perf");
-		if (IS_ERR_OR_NULL(ptdev->pm_domain_devs[1])) {
-			err = PTR_ERR(ptdev->pm_domain_devs[1]) ? : -ENODATA;
-			ptdev->pm_domain_devs[1] = NULL;
-			dev_err(ptdev->base.dev,
-				"failed to get acpi perf domain %d\n", err);
-			goto err;
-		}
+		/*
+		 * ACPI path: the genpd attach-by-name API is DT-only
+		 * (genpd_dev_pm_attach_by_name returns NULL without of_node).
+		 * Instead, look up the SCMI perf genpd by name directly and
+		 * attach the device to it.
+		 *
+		 * The SCMI perf domain driver may not have probed (e.g. no
+		 * SCMI transport under ACPI), in which case the GPU still
+		 * works but without DVFS frequency scaling.
+		 */
+		struct generic_pm_domain *perf_genpd;
 
-		ptdev->pm_domain_links[1] = device_link_add(ptdev->base.dev,
-				ptdev->pm_domain_devs[1], DL_FLAG_PM_RUNTIME |
-				DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
-		if (!ptdev->pm_domain_links[1]) {
-			dev_err(ptdev->base.dev, "Failed to add device_link to gpu perf domain.\n");
-			err = -ENODEV;
-			goto err;
-		}
-
-		struct fwnode_handle *fwnode = fwnode_find_reference(ptdev->base.dev->fwnode,
-								     "power-supply", 0);
-		if (IS_ERR_OR_NULL(fwnode)) {
+		perf_genpd = pm_genpd_lookup_by_name("gpu_core_0");
+		if (!perf_genpd) {
 			dev_warn(ptdev->base.dev,
-				 "Failed to get power-supply property, using single power domain.\n");
+				 "SCMI perf domain not available, continuing without DVFS\n");
 			return 0;
 		}
-		ptdev->pm_domain_devs[0] = bus_find_device_by_fwnode(&platform_bus_type, fwnode);
-		pm_runtime_enable(ptdev->pm_domain_devs[0]);
-		dev_pm_domain_attach(ptdev->pm_domain_devs[0], true);
-		fwnode_handle_put(fwnode);
 
-		ptdev->pm_domain_links[0] = device_link_add(ptdev->base.dev,
-				ptdev->pm_domain_devs[0], DL_FLAG_PM_RUNTIME |
-				DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
-		if (!ptdev->pm_domain_links[0]) {
-			dev_err(ptdev->base.dev, "Failed to add device_link to gpu power domain.\n");
-			err = -ENODEV;
-			goto err;
+		/*
+		 * Detach the generic ACPI PM domain that
+		 * acpi_dev_pm_attach() already set on this device,
+		 * otherwise pm_genpd_add_device() cannot replace it.
+		 */
+		dev_pm_domain_detach(ptdev->base.dev, false);
+
+		err = pm_genpd_add_device(perf_genpd, ptdev->base.dev);
+		if (err) {
+			/*
+			 * Another driver (e.g. mali_kbase) may have already
+			 * attached this device to the genpd. Not fatal.
+			 */
+			dev_dbg(ptdev->base.dev,
+				"gpu perf domain attach returned %d, continuing\n",
+				err);
+			err = 0;
 		}
 	}
 

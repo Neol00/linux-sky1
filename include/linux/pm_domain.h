@@ -310,6 +310,7 @@ static inline struct generic_pm_domain_data *dev_gpd_data(struct device *dev)
 
 int pm_genpd_add_device(struct generic_pm_domain *genpd, struct device *dev);
 int pm_genpd_remove_device(struct device *dev);
+struct generic_pm_domain *pm_genpd_lookup_by_name(const char *name);
 int pm_genpd_add_subdomain(struct generic_pm_domain *genpd,
 			   struct generic_pm_domain *subdomain);
 int pm_genpd_remove_subdomain(struct generic_pm_domain *genpd,
@@ -341,6 +342,10 @@ extern struct dev_power_governor pm_domain_cpu_gov;
 static inline struct generic_pm_domain_data *dev_gpd_data(struct device *dev)
 {
 	return ERR_PTR(-ENOSYS);
+}
+static inline struct generic_pm_domain *pm_genpd_lookup_by_name(const char *name)
+{
+	return NULL;
 }
 static inline int pm_genpd_add_device(struct generic_pm_domain *genpd,
 				      struct device *dev)

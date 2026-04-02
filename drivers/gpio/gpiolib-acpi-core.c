@@ -88,6 +88,7 @@ struct acpi_gpio_info {
 	int pin_config;
 	int polarity;
 	int triggering;
+	int io_restriction;
 	unsigned int debounce;
 	unsigned int quirks;
 };
@@ -673,6 +674,10 @@ static int acpi_gpio_update_gpiod_lookup_flags(unsigned long *lookupflags,
 	if (info->polarity == GPIO_ACTIVE_LOW)
 		*lookupflags |= GPIO_ACTIVE_LOW;
 
+	/* IoRestrictionOutputOnly implies open drain (e.g. I2C SCL) */
+	if (info->io_restriction == ACPI_IO_RESTRICT_OUTPUT)
+		*lookupflags |= GPIO_OPEN_DRAIN;
+
 	return 0;
 }
 
@@ -715,6 +720,7 @@ static int acpi_populate_gpio_lookup(struct acpi_resource *ares, void *data)
 					      agpio->pin_table[pin_index]);
 		lookup->desc = desc;
 		info->pin_config = agpio->pin_config;
+		info->io_restriction = agpio->io_restriction;
 		info->debounce = agpio->debounce_timeout;
 		info->gpioint = gpioint;
 		info->wake_capable = acpi_gpio_irq_is_wake(&info->adev->dev, agpio);

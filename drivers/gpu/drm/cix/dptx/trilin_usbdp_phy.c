@@ -153,8 +153,10 @@ static trilin_phy_error_t trilin_usbdp_phy_init(struct trilin_dp *dp,
 
 	if (!IS_ERR_OR_NULL(phy->base)) {
 		ret = phy_power_on(phy->base);
-		if (ret)
-			dev_err(dp->dev, "failed to power phy on");
+		if (ret) {
+			dev_err(dp->dev, "failed to power phy on: %d\n", ret);
+			return trilin_phy_error_core_not_present;
+		}
 	}
 
 	trilin_phy_write(dp, TRILIN_USBDP_PHY_LANE_RSTN_BITS, 0x000f);
@@ -168,7 +170,15 @@ static trilin_phy_error_t trilin_usbdp_phy_init(struct trilin_dp *dp,
 
 	// bring the power state back up to active
 	status = trilin_usbdp_phy_power(dp, trilin_power_a2);
+	if (status != trilin_phy_error_none) {
+		DP_ERR("Failed to transition to power state A2\n");
+		return status;
+	}
 	status = trilin_usbdp_phy_power(dp, trilin_power_a0);
+	if (status != trilin_phy_error_none) {
+		DP_ERR("Failed to transition to power state A0\n");
+		return status;
+	}
 	// set data enable bit
 	trilin_phy_write(dp, TRILIN_USBDP_PHY_DATA_ENABLE, 1);
 

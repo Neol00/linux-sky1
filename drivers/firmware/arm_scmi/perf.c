@@ -306,6 +306,21 @@ scmi_perf_domain_attributes_get(const struct scmi_protocol_handle *ph,
 					 "multiplier for domain %d rounded\n",
 					 dom_info->id);
 		}
+#ifdef CONFIG_ARCH_CIX
+		/*
+		 * CIX Sky1 firmware reports perf levels in MHz-scale.
+		 * mult_factor = 1000000 so that:
+		 *   freq = perf_MHz * 1000000 = Hz  (for OPP/devfreq)
+		 *   level = freq_Hz / 1000000 = MHz (for PERF_LEVEL_SET)
+		 */
+		dev_info(ph->dev,
+			 "CIX domain %d: sustained_freq_khz=%u sustained_perf_level=%u computed_mult=%lu, overriding to 1000000\n",
+			 dom_info->id,
+			 dom_info->sustained_freq_khz,
+			 dom_info->sustained_perf_level,
+			 dom_info->mult_factor);
+		dom_info->mult_factor = 1000000;
+#endif
 		if (!dom_info->mult_factor)
 			dev_warn(ph->dev,
 				 "Wrong sustained perf/frequency(domain %d)\n",
@@ -382,6 +397,9 @@ process_response_opp(struct device *dev, struct perf_dom_info *dom,
 	opp->trans_latency_us =
 		le16_to_cpu(r->opp[loop_idx].transition_latency_us);
 
+	dev_dbg(dev, "CIX OPP[%u]: perf_val=%u power=%u latency_us=%u\n",
+		loop_idx, opp->perf, opp->power, opp->trans_latency_us);
+
 	ret = xa_insert(&dom->opps_by_lvl, opp->perf, opp, GFP_KERNEL);
 	if (ret) {
 		/* Silently skip duplicate OPP levels (expected with CIX BIOS) */
@@ -443,6 +461,11 @@ iter_perf_levels_process_response(const struct scmi_protocol_handle *ph,
 	struct perf_dom_info *perf_dom = priv;
 
 	opp = &perf_dom->opp[perf_dom->opp_count];
+	if (perf_dom->opp_count >= MAX_OPPS) {
+		dev_err(ph->dev, "OPP count %d exceeds MAX_OPPS\n",
+			perf_dom->opp_count);
+		return -ENOSPC;
+	}
 	if (PROTOCOL_REV_MAJOR(ph->version) <= 0x3)
 		ret = process_response_opp(ph->dev, perf_dom, opp,
 					   st->loop_idx, response);
@@ -833,8 +856,12 @@ static void scmi_perf_domain_init_fc(const struct scmi_protocol_handle *ph,
 	struct scmi_fc_info *fc;
 
 	fc = devm_kcalloc(ph->dev, PERF_FC_MAX, sizeof(*fc), GFP_KERNEL);
-	if (!fc)
+	if (!fc) {
+		dev_warn(ph->dev,
+			 "Failed to alloc fast-channel info for domain %u\n",
+			 dom->id);
 		return;
+	}
 
 	ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
 				   PERF_LEVEL_GET, 4, dom->id,
@@ -917,6 +944,8 @@ scmi_dvfs_transition_latency_get(const struct scmi_protocol_handle *ph,
 		return PTR_ERR(dom);
 
 	/* uS to nS */
+	if (!dom->opp_count)
+		return 0;
 	return dom->opp[dom->opp_count - 1].trans_latency_us * 1000;
 }
 
@@ -947,8 +976,17 @@ static int scmi_dvfs_freq_set(const struct scmi_protocol_handle *ph, u32 domain,
 	if (IS_ERR(dom))
 		return PTR_ERR(dom);
 
+	if (unlikely(!dom->mult_factor)) {
+		dev_err(ph->dev, "Invalid mult_factor=0 for domain %u\n",
+			domain);
+		return -EINVAL;
+	}
+
 	if (!dom->level_indexing_mode) {
 		level = freq / dom->mult_factor;
+		dev_dbg(ph->dev,
+			"CIX freq_set: domain=%u freq=%lu mult=%u → level=%u\n",
+			domain, freq, dom->mult_factor, level);
 	} else {
 		struct scmi_opp *opp;
 

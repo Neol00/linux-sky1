@@ -83,7 +83,8 @@ enum {
 	STYLESTR=4,
 };
 
-int get_kernel_build_time(char* blddt, int dtlen, char* bldtm, int tmlen)
+int get_kernel_build_time(char *blddt, int dtlen, char *bldtm, int tmlen);
+int get_kernel_build_time(char *blddt, int dtlen, char *bldtm, int tmlen)
 {
 	char *timepos = NULL;
 	int i = 0;

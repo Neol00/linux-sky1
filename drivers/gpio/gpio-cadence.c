@@ -78,8 +78,6 @@ static const struct cdns_gpio_quirks ax3000_gpio_quirks = {
 	.skip_init = true,
 };
 
-static unsigned int cdns_gpio_base;
-
 static int cdns_gpio_request(struct gpio_chip *chip, unsigned int offset)
 {
 	struct cdns_gpio_chip *cgpio = gpiochip_get_data(chip);

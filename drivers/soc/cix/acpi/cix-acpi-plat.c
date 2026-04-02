@@ -129,7 +129,7 @@ static void device_deny_id_init(void)
 		acpi_scan_add_handler(&acpi_deny_handler[i]);
 }
 
-int cix_acpi_plat_arch_init(void)
+static int cix_acpi_plat_arch_init(void)
 {
 	device_deny_id_init();
 

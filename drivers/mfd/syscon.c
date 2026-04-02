@@ -380,7 +380,7 @@ struct regmap *device_syscon_regmap_lookup_by_property(struct device *dev,
 
 		ref_fn = fwnode_find_reference(dev_fwnode(dev), property, 0);
 		if (IS_ERR(ref_fn))
-			return ERR_CAST(ref_fn);
+			return ERR_PTR(-ENODEV);
 
 		ref_dev = get_dev_from_fwnode(ref_fn);
 		fwnode_handle_put(ref_fn);

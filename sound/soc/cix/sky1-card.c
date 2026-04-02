@@ -28,7 +28,8 @@ static int cix_asoc_card_probe(struct platform_device *pdev)
 		ret = cix_card_parse_of(priv);
 	if (ret) {
 		if (ret != -EPROBE_DEFER)
-			dev_err(dev, "cix_card_parse_of failed (%d)\n", ret);
+			dev_err(dev, "cix_card_parse_%s failed (%d)\n",
+				ACPI_COMPANION(dev) ? "acpi" : "of", ret);
 		goto err;
 	}
 

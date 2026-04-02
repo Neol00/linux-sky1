@@ -7,7 +7,6 @@ ifneq ($(KERNELRELEASE),)
 	csi_dma-objs = csi_dma_core.o csi_dma_cap.o
 	obj-$(CONFIG_CSI_DMA) += csi_bridge_hw.o
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_csi2.o
-	obj-$(CONFIG_CSI_DMA) += csi_mipi_csi2_hw.o
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_dphy_rx.o
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_dphy_hw.o
 	obj-$(CONFIG_CSI_DMA) += csi_rcsu_hw.o

@@ -75,7 +75,7 @@ static int scmi_pm_domain_probe(struct scmi_device *sdev)
 	if (!domains)
 		return -ENOMEM;
 
-	for (i = 0; i < num_domains; i++, scmi_pd++) {
+	for (i = 0; i < num_domains; i++) {
 		u32 state;
 
 		if (power_ops->state_get(ph, i, &state)) {
@@ -91,18 +91,18 @@ static int scmi_pm_domain_probe(struct scmi_device *sdev)
 		if (state == SCMI_POWER_STATE_GENERIC_ON)
 			power_ops->state_set(ph, i, state);
 
-		scmi_pd->domain = i;
-		scmi_pd->ph = ph;
-		scmi_pd->name = power_ops->name_get(ph, i);
-		scmi_pd->genpd.name = scmi_pd->name;
-		scmi_pd->genpd.power_off = scmi_pd_power_off;
-		scmi_pd->genpd.power_on = scmi_pd_power_on;
-		scmi_pd->genpd.flags = GENPD_FLAG_ACTIVE_WAKEUP;
+		scmi_pd[i].domain = i;
+		scmi_pd[i].ph = ph;
+		scmi_pd[i].name = power_ops->name_get(ph, i);
+		scmi_pd[i].genpd.name = scmi_pd[i].name;
+		scmi_pd[i].genpd.power_off = scmi_pd_power_off;
+		scmi_pd[i].genpd.power_on = scmi_pd_power_on;
+		scmi_pd[i].genpd.flags = GENPD_FLAG_ACTIVE_WAKEUP;
 
-		pm_genpd_init(&scmi_pd->genpd, NULL,
+		pm_genpd_init(&scmi_pd[i].genpd, NULL,
 			      state == SCMI_POWER_STATE_GENERIC_OFF);
 
-		domains[i] = &scmi_pd->genpd;
+		domains[i] = &scmi_pd[i].genpd;
 	}
 
 	scmi_pd_data->domains = domains;
@@ -132,6 +132,9 @@ static void scmi_pm_domain_remove(struct scmi_device *sdev)
 	of_genpd_del_provider(np);
 
 	scmi_pd_data = dev_get_drvdata(dev);
+	if (!scmi_pd_data)
+		return;
+
 	for (i = 0; i < scmi_pd_data->num_domains; i++) {
 		if (!scmi_pd_data->domains[i])
 			continue;

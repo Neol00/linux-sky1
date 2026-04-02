@@ -163,6 +163,9 @@ void dptx_audio_reconfig_and_enable(void *data)
 	struct trilin_dp *dp = (struct trilin_dp *)data;
 	struct dptx_audio *dp_audio = &dp->dp_audio;
 
+	if (!trilin_dp_plugged_status(dp))
+		return;
+
 	dptx_audio_setup(dp, 0, dp_audio->params.sample_rate,
 			 dp_audio->params.sample_width,
 			 dp_audio->params.channels);

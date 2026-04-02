@@ -16,6 +16,8 @@
 #include <linux/platform_device.h>
 #include <linux/sysfs.h>
 #include <linux/version.h>
+#include <linux/arm-smccc.h>
+#include <linux/delay.h>
 #include "acpi_clk.h"
 
 #define GET_CLOCK_RATE		0x00000001
@@ -27,6 +29,143 @@
 #define CLOCK_DISABLE		0
 #define CLK_MASK		(0xffffffff)
 #define SUCCESS		0
+
+/*
+ * CIX Sky1 SCMI-over-SMC clock rate set.
+ *
+ * The SCP firmware has two SCMI transport channels:
+ *   - Mailbox (0x065d0000): used by ACPI SClK/GClK methods
+ *   - SMC (shmem 0x84380000, func 0xc2000001): used by DT for power/clock
+ *
+ * The mailbox transport silently accepts CLOCK_RATE_SET but never actually
+ * reprograms certain PLLs (audio, display).  The SMC transport reaches the
+ * correct SCP agent.
+ */
+#define CIX_SMC_FUNC_ID		0xc2000001UL
+#define CIX_SMC_SHMEM_PHYS	0x84380000UL
+#define CIX_SMC_SHMEM_SIZE	0x80
+
+#define CIX_SH_CHAN_STATUS	0x04
+#define CIX_SH_FLAGS		0x10
+#define CIX_SH_LENGTH		0x14
+#define CIX_SH_MSG_HEADER	0x18
+#define CIX_SH_MSG_PAYLOAD	0x1c
+#define CIX_SH_CHAN_FREE	BIT(0)
+
+#define CIX_SCMI_HDR(proto, msg) \
+	(((msg) & 0xFF) | (((proto) & 0xFF) << 10))
+
+static DEFINE_MUTEX(acpi_smc_scmi_lock);
+
+static int acpi_cix_smc_clock_rate_set(struct device *dev,
+				       u32 clk_id, u64 rate)
+{
+	void __iomem *shmem;
+	struct arm_smccc_res res;
+	u32 status;
+	int timeout;
+
+	shmem = ioremap(CIX_SMC_SHMEM_PHYS, CIX_SMC_SHMEM_SIZE);
+	if (!shmem)
+		return -ENOMEM;
+
+	mutex_lock(&acpi_smc_scmi_lock);
+
+	timeout = 1000;
+	while (timeout-- > 0) {
+		if (ioread32(shmem + CIX_SH_CHAN_STATUS) & CIX_SH_CHAN_FREE)
+			break;
+		udelay(10);
+	}
+	if (timeout <= 0) {
+		mutex_unlock(&acpi_smc_scmi_lock);
+		iounmap(shmem);
+		return -EBUSY;
+	}
+
+	iowrite32(0, shmem + CIX_SH_CHAN_STATUS);
+	iowrite32(0, shmem + CIX_SH_FLAGS);
+	/* Length = header(4) + payload(16): flags + id + rate_lo + rate_hi */
+	iowrite32(20, shmem + CIX_SH_LENGTH);
+	/* protocol 0x14 = CLOCK, message 0x05 = CLOCK_RATE_SET */
+	iowrite32(CIX_SCMI_HDR(0x14, 0x05), shmem + CIX_SH_MSG_HEADER);
+	iowrite32(0, shmem + CIX_SH_MSG_PAYLOAD);
+	iowrite32(clk_id, shmem + CIX_SH_MSG_PAYLOAD + 4);
+	iowrite32((u32)(rate & 0xFFFFFFFF), shmem + CIX_SH_MSG_PAYLOAD + 8);
+	iowrite32((u32)(rate >> 32), shmem + CIX_SH_MSG_PAYLOAD + 12);
+
+	arm_smccc_smc(CIX_SMC_FUNC_ID,
+		      CIX_SMC_SHMEM_PHYS >> 12, 0,
+		      0, 0, 0, 0, 0, &res);
+
+	status = ioread32(shmem + CIX_SH_MSG_PAYLOAD);
+	iowrite32(CIX_SH_CHAN_FREE, shmem + CIX_SH_CHAN_STATUS);
+
+	mutex_unlock(&acpi_smc_scmi_lock);
+	iounmap(shmem);
+
+	if (res.a0) {
+		dev_warn(dev, "SMC SCMI transport error: a0=0x%lx\n", res.a0);
+		return -EIO;
+	}
+	if (status != 0) {
+		dev_warn(dev, "SMC CLOCK_RATE_SET(clk %u, %llu Hz): err 0x%x\n",
+			 clk_id, rate, status);
+		return -EIO;
+	}
+	return 0;
+}
+
+static u64 acpi_cix_smc_clock_rate_get(struct device *dev, u32 clk_id)
+{
+	void __iomem *shmem;
+	struct arm_smccc_res res;
+	u32 status, rate_lo, rate_hi;
+	int timeout;
+
+	shmem = ioremap(CIX_SMC_SHMEM_PHYS, CIX_SMC_SHMEM_SIZE);
+	if (!shmem)
+		return 0;
+
+	mutex_lock(&acpi_smc_scmi_lock);
+
+	timeout = 1000;
+	while (timeout-- > 0) {
+		if (ioread32(shmem + CIX_SH_CHAN_STATUS) & CIX_SH_CHAN_FREE)
+			break;
+		udelay(10);
+	}
+	if (timeout <= 0) {
+		mutex_unlock(&acpi_smc_scmi_lock);
+		iounmap(shmem);
+		return 0;
+	}
+
+	iowrite32(0, shmem + CIX_SH_CHAN_STATUS);
+	iowrite32(0, shmem + CIX_SH_FLAGS);
+	/* Length = header(4) + payload(4): clk_id */
+	iowrite32(8, shmem + CIX_SH_LENGTH);
+	/* protocol 0x14 = CLOCK, message 0x06 = CLOCK_RATE_GET */
+	iowrite32(CIX_SCMI_HDR(0x14, 0x06), shmem + CIX_SH_MSG_HEADER);
+	iowrite32(clk_id, shmem + CIX_SH_MSG_PAYLOAD);
+
+	arm_smccc_smc(CIX_SMC_FUNC_ID,
+		      CIX_SMC_SHMEM_PHYS >> 12, 0,
+		      0, 0, 0, 0, 0, &res);
+
+	status = ioread32(shmem + CIX_SH_MSG_PAYLOAD);
+	rate_lo = ioread32(shmem + CIX_SH_MSG_PAYLOAD + 4);
+	rate_hi = ioread32(shmem + CIX_SH_MSG_PAYLOAD + 8);
+	iowrite32(CIX_SH_CHAN_FREE, shmem + CIX_SH_CHAN_STATUS);
+
+	mutex_unlock(&acpi_smc_scmi_lock);
+	iounmap(shmem);
+
+	if (res.a0 || status != 0)
+		return 0;
+
+	return ((u64)rate_hi << 32) | rate_lo;
+}
 
 static LIST_HEAD(aclk_list);
 static LIST_HEAD(aclk_hw_list);
@@ -144,54 +283,16 @@ static unsigned long acpi_cix_clk_recalc_rate(struct clk_hw *hw,
 {
 	struct acpi_clk_hw *aclk_hw = to_acpi_clk_hw(hw);
 	struct device *dev = aclk_hw->dev;
-	acpi_handle handle = ACPI_HANDLE(dev);
-	acpi_status status;
-	unsigned long clk_rate;
-	u32 buf_val[3] = {0};
-	int ret = 0;
-	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object args[] = {
-		{ .type = ACPI_TYPE_INTEGER, },
-	};
-	struct acpi_object_list arg_list = {
-		.pointer = args,
-		.count = ARRAY_SIZE(args),
-	};
-	union acpi_object *package;
+	u64 rate;
 
-	args[0].integer.value = cpu_to_le32(aclk_hw->clk_id);
-	status = acpi_evaluate_object(handle, "GClK", &arg_list, &buffer);
-	if (ACPI_FAILURE(status)) {
-		dev_err(dev, "ACPI evaluation failed\n");
-		ret = -ENODEV;
-		goto OUT;
+	rate = acpi_cix_smc_clock_rate_get(dev, aclk_hw->clk_id);
+	if (rate == 0) {
+		dev_warn(dev, "SMC GClK: clk[%u] rate_get failed\n",
+			 aclk_hw->clk_id);
+		return 0;
 	}
 
-	package = buffer.pointer;
-	if (!package || package->type != ACPI_TYPE_BUFFER) {
-		dev_err(dev, "Couldn't locate correct ACPI buffer\n");
-		ret = -ENODEV;
-		goto OUT;
-	}
-
-	buf_val[0] = ((u32 *)package->buffer.pointer)[0];
-	buf_val[1] = ((u32 *)package->buffer.pointer)[1];
-	buf_val[2] = ((u32 *)package->buffer.pointer)[2];
-	if (buf_val[0] != SUCCESS) {
-		dev_err(dev, "ACPI clk[%u] rec rate err:%d\n",
-					aclk_hw->clk_id, buf_val[0]);
-		ret = buf_val[0];
-		goto OUT;
-	}
-
-	clk_rate = ((u64)(buf_val[2] & CLK_MASK) << 32)
-			| (u64)(buf_val[1] & CLK_MASK);
-
-OUT:
-	if (buffer.pointer)
-		kfree(buffer.pointer);
-
-	return ret ? 0 : clk_rate;
+	return (unsigned long)rate;
 }
 
 static int acpi_cix_clk_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -199,51 +300,15 @@ static int acpi_cix_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 {
 	struct acpi_clk_hw *aclk_hw = to_acpi_clk_hw(hw);
 	struct device *dev = aclk_hw->dev;
-	acpi_handle handle = ACPI_HANDLE(dev);
-	acpi_status status;
-	u32 buf_val[1];
-	int ret = 0;
-	union acpi_object *package;
-	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object args[3] = {
-		{ .type = ACPI_TYPE_INTEGER, },
-		{ .type = ACPI_TYPE_INTEGER, },
-		{ .type = ACPI_TYPE_INTEGER, },
-	};
+	int ret;
 
-	struct acpi_object_list arg_list = {
-		.pointer = args,
-		.count = ARRAY_SIZE(args),
-	};
-
-	args[0].integer.value = aclk_hw->clk_id;
-	args[1].integer.value = (cpu_to_le32(rate & CLK_MASK));
-	args[2].integer.value = (cpu_to_le32((rate >> 32) & CLK_MASK));
-
-	status = acpi_evaluate_object(handle, "SClK", &arg_list, &buffer);
-	if (ACPI_FAILURE(status)) {
-		dev_err(dev, "ACPI evaluation failed\n");
-		ret = -ENODEV;
-		goto OUT;
-	}
-
-	package = buffer.pointer;
-	if (!package || package->type != ACPI_TYPE_BUFFER) {
-		dev_err(dev, "Couldn't locate ACPI buffer\n");
-		ret = -ENODEV;
-		goto OUT;
-	}
-
-	buf_val[0] = *(u32 *)package->buffer.pointer;
-	if (buf_val[0] != SUCCESS) {
-		dev_err(dev, "ACPI clk[%u] set rate err:%d\n",
-					aclk_hw->clk_id, buf_val[0]);
-		goto OUT;
-	}
-
-OUT:
-	if (buffer.pointer)
-		kfree(buffer.pointer);
+	ret = acpi_cix_smc_clock_rate_set(dev, aclk_hw->clk_id, (u64)rate);
+	if (ret)
+		dev_err(dev, "SMC SClK: clk[%u] set rate %lu failed (%d)\n",
+			aclk_hw->clk_id, rate, ret);
+	else
+		dev_info(dev, "SMC SClK: clk[%u] set rate %lu OK\n",
+			 aclk_hw->clk_id, rate);
 
 	return ret;
 }
@@ -289,7 +354,7 @@ static struct clk_hw *devm_acpi_clk_hw_alloc(struct device *dev,
 	struct acpi_clk_hw *aclk_hw = NULL;
 
 	aclk_hw = devm_kzalloc(dev, sizeof(*aclk_hw), GFP_KERNEL);
-	if (IS_ERR(aclk_hw))
+	if (!aclk_hw)
 		return ERR_PTR(-ENOMEM);
 
 	aclk_hw->clk_id = clk_id;
@@ -301,7 +366,7 @@ static struct clk_hw *devm_acpi_clk_hw_alloc(struct device *dev,
 
 static struct clk_hw *acpi_clk_get_or_create_hw(struct device *dev, int clk_id)
 {
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct clk_hw *hw;
 	struct acpi_clk_hw *aclk_hw;
 	char clk_name[CLK_NAME_LEN];
@@ -462,8 +527,8 @@ static int cix_acpi_clk_probe(struct platform_device *pdev)
 				ACPI_UINT32_MAX, acpi_bus_clk_scan,
 				NULL, &pdev->dev, NULL);
 
-	/* do not ensure every resource since differnt configs */
-	return status;
+	/* do not ensure every resource since different configs */
+	return ACPI_FAILURE(status) ? -ENODEV : 0;
 }
 
 static void cix_acpi_clk_remove(struct platform_device *pdev)

@@ -749,10 +749,8 @@ static int cix_sfh_rproc_addr_init(struct cix_sfh_rproc *rproc_priv)
 {
 	struct device *dev = rproc_priv->dev;
 	struct device_node *np = dev->of_node;
-	struct cix_mem_region *mem_reg = rproc_priv->mem_region;
 	struct cix_sfh_mem *p_mem;
 	int err, nph, i;
-	int r_num = 0;
 
 	nph = of_count_phandle_with_args(np, "memory-region", NULL);
 	if (nph <= 0)

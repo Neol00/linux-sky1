@@ -1317,7 +1317,12 @@ static void scmi_put_active_handler(struct scmi_notify_instance *ni,
 {
 	bool freed;
 	struct scmi_registered_event *r_evt = hndl->r_evt;
-	u8 protocol_id = r_evt->proto->id;
+	u8 protocol_id;
+
+	if (!r_evt || !r_evt->proto)
+		return;
+
+	protocol_id = r_evt->proto->id;
 
 	mutex_lock(&r_evt->proto->registered_mtx);
 	freed = scmi_put_handler_unlocked(ni, hndl);
@@ -1437,8 +1442,8 @@ static int scmi_notifier_unregister(const struct scmi_handle *handle,
 	evt_key = MAKE_HASH_KEY(proto_id, evt_id,
 				src_id ? *src_id : SRC_ID_MASK);
 	hndl = scmi_get_handler(ni, evt_key);
-	if (IS_ERR(hndl))
-		return PTR_ERR(hndl);
+	if (IS_ERR_OR_NULL(hndl))
+		return IS_ERR(hndl) ? PTR_ERR(hndl) : -ENOENT;
 
 	/*
 	 * Note that this chain unregistration call is safe on its own

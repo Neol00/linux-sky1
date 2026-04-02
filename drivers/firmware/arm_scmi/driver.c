@@ -1011,7 +1011,7 @@ scmi_xfer_command_acquire(struct scmi_chan_info *cinfo, u32 msg_hdr)
 	spin_lock_irqsave(&minfo->xfer_lock, flags);
 	xfer = scmi_xfer_lookup_unlocked(minfo, xfer_id);
 	if (IS_ERR(xfer)) {
-		dev_err(cinfo->dev,
+		dev_dbg(cinfo->dev,
 			"Message for %d type %d is not expected!\n",
 			xfer_id, msg_type);
 		spin_unlock_irqrestore(&minfo->xfer_lock, flags);
@@ -1040,7 +1040,7 @@ scmi_xfer_command_acquire(struct scmi_chan_info *cinfo, u32 msg_hdr)
 	spin_unlock_irqrestore(&xfer->lock, flags);
 
 	if (ret) {
-		dev_err(cinfo->dev,
+		dev_dbg(cinfo->dev,
 			"Invalid message type:%d for %d - HDR:0x%X  state:%d\n",
 			msg_type, xfer_id, msg_hdr, xfer->state);
 
@@ -1164,8 +1164,16 @@ static void scmi_handle_response(struct scmi_chan_info *cinfo,
 			   xfer->hdr.type);
 
 	if (xfer->hdr.type == MSG_TYPE_DELAYED_RESP) {
+		struct completion *async_done;
+
 		scmi_clear_channel(info, cinfo);
-		complete(xfer->async_done);
+		async_done = READ_ONCE(xfer->async_done);
+		if (async_done)
+			complete(async_done);
+		else
+			dev_warn(cinfo->dev,
+				 "async_done NULL for delayed resp seq %d\n",
+				 xfer->hdr.seq);
 		scmi_inc_count(info->dbg, DELAYED_RESPONSE_OK);
 	} else {
 		complete(&xfer->done);
@@ -1316,7 +1324,7 @@ static int scmi_wait_for_reply(struct device *dev, const struct scmi_desc *desc,
 		/* And we wait for the response. */
 		if (!wait_for_completion_timeout(&xfer->done,
 						 msecs_to_jiffies(timeout_ms))) {
-			dev_err(dev, "timed out in resp(caller: %pS)\n",
+			dev_warn_ratelimited(dev, "timed out in resp(caller: %pS)\n",
 				(void *)_RET_IP_);
 			ret = -ETIMEDOUT;
 			scmi_inc_count(info->dbg, XFERS_RESPONSE_TIMEOUT);
@@ -1530,7 +1538,8 @@ static int do_xfer_with_response(const struct scmi_protocol_handle *ph,
 		}
 	}
 
-	xfer->async_done = NULL;
+	smp_wmb();
+	WRITE_ONCE(xfer->async_done, NULL);
 	return ret;
 }
 
@@ -1839,12 +1848,9 @@ static int scmi_iterator_run(void *iter)
 			break;
 
 		if (st->num_returned > st->max_resources - st->desc_index) {
-			dev_err(ph->dev,
-				"No. of resources can't exceed %d (got %d, remaining %d, rx_len %zd, desc_index %d)\n",
-				st->max_resources, st->num_returned,
-				st->num_remaining, st->rx_len,
+			dev_dbg(ph->dev,
+				"resource iterator capped at %d entries\n",
 				st->desc_index);
-			ret = -EINVAL;
 			break;
 		}
 

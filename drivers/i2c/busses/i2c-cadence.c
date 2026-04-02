@@ -1354,10 +1354,12 @@ static int cdns_i2c_calc_divs(unsigned long *f, unsigned long input_clk,
 	temp = input_clk / (22 * fscl);
 
 	/*
-	 * If the calculated value is negative or 0, the fscl input is out of
-	 * range. Return error.
+	 * If the calculated value is 0, the fscl input is out of range
+	 * (input clock too low). Return error.
+	 * If temp exceeds the divider range, fall through to the search
+	 * loop which will use max dividers for the closest achievable rate.
 	 */
-	if (!temp || (temp > (CDNS_I2C_DIVA_MAX * CDNS_I2C_DIVB_MAX)))
+	if (!temp)
 		return -EINVAL;
 
 	last_error = -1;

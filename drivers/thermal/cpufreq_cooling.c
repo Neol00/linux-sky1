@@ -26,8 +26,7 @@
 #include "thermal_trace.h"
 
 #ifdef CONFIG_CIX_THERMAL
-int cix_get_static_power_cpus(cpumask_var_t cpus);
-int cix_get_dynamic_power_cpus(cpumask_var_t cpus);
+#include "cix/cix_cpu_ipa.h"
 #endif
 
 /*

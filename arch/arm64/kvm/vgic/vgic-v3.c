@@ -19,7 +19,7 @@ static bool group0_trap;
 static bool group1_trap;
 static bool common_trap;
 static bool dir_trap;
-static bool gicv4_enable;
+static bool gicv4_enable = true;
 
 void vgic_v3_configure_hcr(struct kvm_vcpu *vcpu,
 			   struct ap_list_summary *als)

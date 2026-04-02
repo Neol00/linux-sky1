@@ -1983,6 +1983,32 @@ int pm_genpd_add_device(struct generic_pm_domain *genpd, struct device *dev)
 }
 EXPORT_SYMBOL_GPL(pm_genpd_add_device);
 
+/**
+ * pm_genpd_lookup_by_name - Find a registered generic PM domain by name.
+ * @name: Name of the PM domain to find.
+ *
+ * Returns the genpd, or NULL if not found.
+ */
+struct generic_pm_domain *pm_genpd_lookup_by_name(const char *name)
+{
+	struct generic_pm_domain *genpd = NULL, *gpd;
+
+	if (!name)
+		return NULL;
+
+	mutex_lock(&gpd_list_lock);
+	list_for_each_entry(gpd, &gpd_list, gpd_list_node) {
+		if (!strcmp(gpd->name, name)) {
+			genpd = gpd;
+			break;
+		}
+	}
+	mutex_unlock(&gpd_list_lock);
+
+	return genpd;
+}
+EXPORT_SYMBOL_GPL(pm_genpd_lookup_by_name);
+
 static int genpd_remove_device(struct generic_pm_domain *genpd,
 			       struct device *dev)
 {

@@ -232,8 +232,6 @@ static const struct vb2_ops aeu_qops = {
     .buf_finish        = aeu_buf_finish_and_cleanup,
     .buf_cleanup        = aeu_buf_finish_and_cleanup,
     .stop_streaming        = aeu_stop_streaming,
-    .wait_prepare        = vb2_ops_wait_prepare,
-    .wait_finish        = vb2_ops_wait_finish,
 };
 
 static int init_vb2_queue(struct vb2_queue *q, unsigned int type, void *priv)
@@ -430,7 +428,7 @@ static int aeu_open(struct file *file)
         goto exit_aeu_hw_ctx;
     }
 
-    v4l2_fh_add(&ctx->fh);
+    v4l2_fh_add(&ctx->fh, file);
     mutex_unlock(&adev->aeu_mutex);
     return 0;
 
@@ -450,7 +448,7 @@ static int aeu_release(struct file *file)
     struct linlon_aeu_device *adev = video_drvdata(file);
     aeu_ctx_t *ctx = file2ctx(file);
 
-    v4l2_fh_del(&ctx->fh);
+    v4l2_fh_del(&ctx->fh, file);
     v4l2_fh_exit(&ctx->fh);
     v4l2_ctrl_handler_free(&ctx->hdl);
     linlon_aeu_hw_free_ctx(ctx->hw_ctx);

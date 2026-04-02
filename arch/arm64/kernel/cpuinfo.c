@@ -229,6 +229,43 @@ static int c_show(struct seq_file *m, void *v)
 	if (compat)
 		seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
 			   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
+	else {
+		const char *model = NULL;
+
+		/*
+		 * Map known MIDR implementer+part combinations to
+		 * human-readable names so that tools like lscpu,
+		 * xfce4-about, and system monitors can display them.
+		 */
+		if (MIDR_IMPLEMENTOR(midr) == 0x41) { /* ARM Ltd */
+			switch (MIDR_PARTNUM(midr)) {
+			case 0xd05: model = "Cortex-A55"; break;
+			case 0xd09: model = "Cortex-A73"; break;
+			case 0xd0a: model = "Cortex-A75"; break;
+			case 0xd0b: model = "Cortex-A76"; break;
+			case 0xd0d: model = "Cortex-A77"; break;
+			case 0xd40: model = "Neoverse-V1"; break;
+			case 0xd41: model = "Cortex-A78"; break;
+			case 0xd44: model = "Cortex-X1"; break;
+			case 0xd46: model = "Cortex-A510"; break;
+			case 0xd47: model = "Cortex-A710"; break;
+			case 0xd48: model = "Cortex-X2"; break;
+			case 0xd4b: model = "Cortex-A78C"; break;
+			case 0xd4e: model = "Cortex-A715"; break;
+			case 0xd80: model = "Cortex-A520"; break;
+			case 0xd81: model = "Cortex-X925"; break;
+			case 0xd82: model = "Cortex-A720"; break;
+			case 0xd85: model = "Cortex-X4"; break;
+			case 0xd87: model = "Cortex-A725"; break;
+			}
+		}
+		if (model)
+			seq_printf(m, "model name\t: %s rev %d\n",
+				   model, MIDR_REVISION(midr));
+		else
+			seq_printf(m, "model name\t: ARMv9 Processor rev %d\n",
+				   MIDR_REVISION(midr));
+	}
 
 	seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
 		   loops_per_jiffy / (500000UL/HZ),

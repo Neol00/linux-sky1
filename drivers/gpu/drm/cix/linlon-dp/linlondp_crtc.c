@@ -21,10 +21,7 @@
 #include "linlondp_kms.h"
 #include "linlondp_drm.h"
 
-extern int linlondp_atomic_replace_property_blob_from_id(
-	struct drm_device *dev, struct drm_property_blob **blob,
-	uint64_t blob_id, ssize_t expected_size, ssize_t expected_elem_size,
-	bool *replaced);
+
 
 void linlondp_crtc_get_color_config(struct drm_crtc_state *crtc_st,
 				    u32 *color_depths, u32 *color_formats)
@@ -108,9 +105,12 @@ static int linlondp_crtc_atomic_check(struct drm_crtc *crtc,
 	}
 
 	/* release unclaimed pipeline resources */
-	err = linlondp_release_unclaimed_resources(kcrtc->slave, kcrtc_st);
-	if (err)
-		return err;
+	if (kcrtc->slave) {
+		err = linlondp_release_unclaimed_resources(kcrtc->slave,
+							   kcrtc_st);
+		if (err)
+			return err;
+	}
 
 	err = linlondp_release_unclaimed_resources(kcrtc->master, kcrtc_st);
 	if (err)
@@ -160,8 +160,10 @@ static int linlondp_crtc_prepare(struct linlondp_crtc *kcrtc)
 		if (err)
 			DRM_ERROR("failed to set aclk.\n");
 		err = clk_prepare_enable(mdev->aclk);
-		if (err)
+		if (err) {
 			DRM_ERROR("failed to enable aclk.\n");
+			goto unlock;
+		}
 #endif
 	}
 
@@ -177,6 +179,11 @@ static int linlondp_crtc_prepare(struct linlondp_crtc *kcrtc)
 	err = clk_prepare_enable(master->pxlclk);
 	if (err)
 		DRM_ERROR("failed to enable pxl clk for pipe%d.\n", master->id);
+
+	dev_info(mdev->dev, "pxlclk: requested=%lu actual=%lu aclk=%lu\n",
+		 (unsigned long)(mode->crtc_clock * 1000),
+		 clk_get_rate(master->pxlclk),
+		 clk_get_rate(mdev->aclk));
 #endif
 unlock:
 	mutex_unlock(&mdev->lock);
@@ -240,7 +247,7 @@ void linlondp_crtc_handle_event(struct linlondp_crtc *kcrtc,
 				  &wb_conn->received_eow);
 		}
 
-		if (kcrtc->side_by_side &&
+		if (kcrtc->side_by_side && kcrtc->slave &&
 		    (evts->pipes[kcrtc->slave->id] & LINLONDP_EVENT_EOW)) {
 			evts->pipes[kcrtc->slave->id] &= ~LINLONDP_EVENT_EOW;
 			atomic_or(BIT(kcrtc->slave->id),
@@ -293,6 +300,10 @@ static void linlondp_wb_job_timer_callback(struct timer_list *t)
 	}
 	kcrtc = (struct linlondp_crtc *)data->param;
 	wb_conn = kcrtc->wb_conn;
+	if (!wb_conn) {
+		DRM_WARN("wb_conn is null in timer callback");
+		return;
+	}
 	spin_lock_irqsave(&wb_conn->base.job_lock, flags);
 	job = list_first_entry_or_null(&wb_conn->base.job_queue,
 				struct drm_writeback_job,
@@ -317,6 +328,9 @@ static void linlondp_set_wb_job_timer(struct linlondp_crtc *kcrtc)
 	 */
 	struct linlondp_wb_connector *wb_conn = kcrtc->wb_conn;
 
+	if (!wb_conn)
+		return;
+
 	if (wb_conn->timer_data.timer_started)
 		timer_delete(&wb_conn->timer_data.timer);
 
@@ -337,9 +351,14 @@ static void linlondp_crtc_do_flush(struct drm_crtc *crtc,
 	struct linlondp_wb_connector *wb_conn = kcrtc->wb_conn;
 	struct drm_connector_state *conn_st;
 
-	pr_debug("CRTC%d_FLUSH: active_pipes: 0x%x, affected: 0x%x.\n",
-		 drm_crtc_index(crtc), kcrtc_st->active_pipes,
-		 kcrtc_st->affected_pipes);
+	{
+		static unsigned long last_log;
+
+		if (printk_timed_ratelimit(&last_log, 600 * 1000))
+			dev_info(mdev->dev, "CRTC%d_FLUSH: active_pipes: 0x%x, affected: 0x%x.\n",
+				 drm_crtc_index(crtc), kcrtc_st->active_pipes,
+				 kcrtc_st->affected_pipes);
+	}
 
 	/* step 1: update the pipeline/component state to HW */
 	if (has_bit(master->id, kcrtc_st->affected_pipes))
@@ -422,7 +441,12 @@ static void linlondp_crtc_atomic_enable(struct drm_crtc *crtc,
 		}
 	}
 
-	pm_runtime_get_sync(crtc->dev->dev);
+	err = pm_runtime_get_sync(crtc->dev->dev);
+	if (err < 0) {
+		dev_err(mdev->dev, "pm_runtime_get_sync failed: %d\n", err);
+		pm_runtime_put_noidle(crtc->dev->dev);
+		return;
+	}
 	//enable irq once more in std scence
 	mdev->funcs->enable_irq(mdev);
 	linlondp_crtc_prepare(to_kcrtc(crtc));
@@ -480,8 +504,8 @@ void linlondp_crtc_flush_and_wait_for_flip_done(
 		} else {
 			struct drm_crtc *crtc = &kcrtc->base;
 			struct drm_pending_vblank_event *event;
-			event = crtc->state->event;
 			spin_lock_irqsave(&drm->event_lock, flags);
+			event = crtc->state->event;
 			crtc->state->event = NULL;
 			if (event) {
 				drm_crtc_send_vblank_event(crtc, event);
@@ -538,9 +562,10 @@ static void linlondp_crtc_atomic_disable(struct drm_crtc *crtc,
 	 *    That's also the reason why skip modeset commit in
 	 *    linlondp_crtc_atomic_flush()
 	 */
-	disable_done = (needs_phase2 || crtc->state->active) ?
-			       NULL :
-			       &crtc->state->commit->flip_done;
+	disable_done = NULL;
+	if (!needs_phase2 && crtc->state && !crtc->state->active &&
+	    crtc->state->commit)
+		disable_done = &crtc->state->commit->flip_done;
 
 	/* wait phase 1 disable done */
 	linlondp_crtc_flush_and_wait_for_flip_done(kcrtc, disable_done, true);

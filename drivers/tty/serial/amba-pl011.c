@@ -2208,9 +2208,14 @@ pl011_set_termios(struct uart_port *port, struct ktermios *termios,
 
 	/*
 	 * Ask the core to calculate the divisor for us.
+	 * For SBSA UARTs with uartclk=0 (firmware-configured fixed baud),
+	 * use the fixed_baud rate directly.
 	 */
-	baud = uart_get_baud_rate(port, termios, old, 0,
-				  port->uartclk / clkdiv);
+	if (port->uartclk)
+		baud = uart_get_baud_rate(port, termios, old, 0,
+					  port->uartclk / clkdiv);
+	else
+		baud = uap->fixed_baud ? uap->fixed_baud : 115200;
 #ifdef CONFIG_DMA_ENGINE
 	/*
 	 * Adjust RX DMA polling rate with baud rate if not specified.
@@ -2306,9 +2311,15 @@ pl011_set_termios(struct uart_port *port, struct ktermios *termios,
 		else if (baud > 3250000 && quot > 2)
 			quot -= 2;
 	}
-	/* Set baud rate */
-	pl011_write(quot & 0x3f, uap, REG_FBRD);
-	pl011_write(quot >> 6, uap, REG_IBRD);
+	/*
+	 * Set baud rate. Skip if uartclk is 0 (SBSA UART with firmware-
+	 * configured fixed baud rate) — writing quot=0 would corrupt the
+	 * divisors that firmware already set correctly.
+	 */
+	if (port->uartclk) {
+		pl011_write(quot & 0x3f, uap, REG_FBRD);
+		pl011_write(quot >> 6, uap, REG_IBRD);
+	}
 
 	/*
 	 * ----------v----------v----------v----------v-----
@@ -2644,104 +2655,53 @@ static int pl011_console_match(struct console *co, char *name, int idx,
 }
 
 static void
-pl011_console_write_atomic(struct console *co, struct nbcon_write_context *wctxt)
+pl011_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct uart_amba_port *uap = amba_ports[co->index];
-	unsigned int old_cr = 0;
-
-	if (!nbcon_enter_unsafe(wctxt))
-		return;
+	unsigned int old_cr = 0, new_cr;
+	unsigned long flags;
+	int locked = 1;
 
 	clk_enable(uap->clk);
 
-	if (!uap->vendor->always_enabled) {
-		old_cr = pl011_read(uap, REG_CR);
-		pl011_write((old_cr & ~UART011_CR_CTSEN) | (UART01x_CR_UARTEN | UART011_CR_TXE),
-				uap, REG_CR);
-	}
-
-	if (!uap->console_line_ended)
-		uart_console_write(&uap->port, "\n", 1, pl011_console_putchar);
-	uart_console_write(&uap->port, wctxt->outbuf, wctxt->len, pl011_console_putchar);
-
-	while ((pl011_read(uap, REG_FR) ^ uap->vendor->inv_fr) & uap->vendor->fr_busy)
-		cpu_relax();
-
-	if (!uap->vendor->always_enabled)
-		pl011_write(old_cr, uap, REG_CR);
-
-	clk_disable(uap->clk);
-
-	nbcon_exit_unsafe(wctxt);
-}
-
-static void
-pl011_console_write_thread(struct console *co, struct nbcon_write_context *wctxt)
-{
-	struct uart_amba_port *uap = amba_ports[co->index];
-	unsigned int old_cr = 0;
-
-	if (!nbcon_enter_unsafe(wctxt))
-		return;
-
-	clk_enable(uap->clk);
+	local_irq_save(flags);
+	if (uap->port.sysrq)
+		locked = 0;
+	else if (oops_in_progress)
+		locked = uart_port_trylock(&uap->port);
+	else
+		uart_port_lock(&uap->port);
 
 	if (!uap->vendor->always_enabled) {
 		old_cr = pl011_read(uap, REG_CR);
-		pl011_write((old_cr & ~UART011_CR_CTSEN) | (UART01x_CR_UARTEN | UART011_CR_TXE),
-				uap, REG_CR);
+		new_cr = old_cr & ~UART011_CR_CTSEN;
+		new_cr |= UART01x_CR_UARTEN | UART011_CR_TXE;
+		pl011_write(new_cr, uap, REG_CR);
 	}
 
-	if (nbcon_exit_unsafe(wctxt)) {
-		int i;
-		unsigned int len = READ_ONCE(wctxt->len);
+	uart_console_write(&uap->port, s, count, pl011_console_putchar);
 
-		for (i = 0; i < len; i++) {
-			if (!nbcon_enter_unsafe(wctxt))
-				break;
-			uart_console_write(&uap->port, wctxt->outbuf + i, 1, pl011_console_putchar);
-			if (!nbcon_exit_unsafe(wctxt))
-				break;
-		}
-	}
-
-	while (!nbcon_enter_unsafe(wctxt))
-		nbcon_reacquire_nobuf(wctxt);
-
-	while ((pl011_read(uap, REG_FR) ^ uap->vendor->inv_fr) & uap->vendor->fr_busy)
+	while ((pl011_read(uap, REG_FR) ^ uap->vendor->inv_fr)
+						& uap->vendor->fr_busy)
 		cpu_relax();
-
 	if (!uap->vendor->always_enabled)
 		pl011_write(old_cr, uap, REG_CR);
 
+	if (locked)
+		uart_port_unlock(&uap->port);
+	local_irq_restore(flags);
+
 	clk_disable(uap->clk);
-
-	nbcon_exit_unsafe(wctxt);
-}
-
-static void
-pl011_console_device_lock(struct console *co, unsigned long *flags)
-{
-	__uart_port_lock_irqsave(&amba_ports[co->index]->port, flags);
-}
-
-static void
-pl011_console_device_unlock(struct console *co, unsigned long flags)
-{
-	__uart_port_unlock_irqrestore(&amba_ports[co->index]->port, flags);
 }
 
 static struct uart_driver amba_reg;
 static struct console amba_console = {
 	.name		= "ttyAMA",
 	.device		= uart_console_device,
+	.write		= pl011_console_write,
 	.setup		= pl011_console_setup,
 	.match		= pl011_console_match,
-	.write_atomic	= pl011_console_write_atomic,
-	.write_thread	= pl011_console_write_thread,
-	.device_lock	= pl011_console_device_lock,
-	.device_unlock	= pl011_console_device_unlock,
-	.flags		= CON_PRINTBUFFER | CON_ANYTIME | CON_NBCON,
+	.flags		= CON_PRINTBUFFER | CON_ANYTIME,
 	.index		= -1,
 	.data		= &amba_reg,
 };
@@ -3255,7 +3215,7 @@ static const struct dev_pm_ops pl011_dev_pm_ops = {
 };
 
 #ifdef CONFIG_ACPI_SPCR_TABLE
-static void qpdf2400_erratum44_workaround(struct device *dev,
+static void __maybe_unused qpdf2400_erratum44_workaround(struct device *dev,
 					  struct uart_amba_port *uap)
 {
 	if (!qdf2400_e44_present)
@@ -3293,20 +3253,23 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * For ACPI, use UID - 1 as port index so ttyAMA numbering is
-	 * stable regardless of which UARTs are enabled.
+	 * For ACPI, use UID to derive a stable port index so ttyAMA
+	 * numbering doesn't depend on which UARTs are enabled.
+	 * CIX DSDT: COM0=UID1, COM1=UID2, COM2=UID3 → ttyAMA0/1/2.
 	 */
 	if (ACPI_COMPANION(&pdev->dev)) {
-		unsigned long long uid;
+		const char *uid_str = acpi_device_uid(ACPI_COMPANION(&pdev->dev));
+		unsigned long uid_val;
 
-		if (acpi_evaluate_integer(ACPI_HANDLE(&pdev->dev),
-					  "_UID", NULL, &uid) == AE_OK &&
-		    uid > 0 && uid <= UART_NR &&
-		    !amba_ports[uid - 1]) {
-			portnr = uid - 1;
+		if (uid_str && !kstrtoul(uid_str, 0, &uid_val) &&
+		    uid_val > 0 && uid_val <= UART_NR &&
+		    !amba_ports[uid_val - 1]) {
+			portnr = uid_val - 1;
 		} else {
 			portnr = pl011_find_free_port();
 		}
+		dev_info(&pdev->dev, "ACPI UID=%s portnr=%d\n",
+			 uid_str ? uid_str : "(null)", portnr);
 	} else {
 		portnr = pl011_find_free_port();
 	}
@@ -3329,12 +3292,12 @@ static int sbsa_uart_probe(struct platform_device *pdev)
 		return ret;
 	uap->port.irq	= ret;
 
-	uap->vendor = &vendor_arm;
+	uap->vendor = &vendor_sbsa;
 
 	uap->reg_offset	= uap->vendor->reg_offset;
 	uap->fifosize	= 32;
 	uap->port.iotype = uap->vendor->access_32b ? UPIO_MEM32 : UPIO_MEM;
-	uap->port.ops	= &amba_pl011_pops;
+	uap->port.ops	= &sbsa_uart_pops;
 	uap->fixed_baud = baudrate;
 
 	snprintf(uap->type, sizeof(uap->type), "SBSA");

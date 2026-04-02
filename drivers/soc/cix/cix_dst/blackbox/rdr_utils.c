@@ -97,7 +97,7 @@ delay:
 
 void rdr_sys_sync(void)
 {
-	if (!in_atomic() && !irqs_disabled() && !in_irq())
+	if (!in_atomic() && !irqs_disabled() && !in_hardirq())
 		/* Ensure all previous file system related operations can be completed */
 		ksys_sync();
 }
