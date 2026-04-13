@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 config PINCTRL_SKY1_BASE
-	tristate
+	bool
 	select GENERIC_PINCTRL_GROUPS
 	select GENERIC_PINMUX_FUNCTIONS
 	select GENERIC_PINCONF
