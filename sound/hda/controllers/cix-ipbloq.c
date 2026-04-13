@@ -917,6 +917,24 @@ static void cix_ipbloq_hda_probe_work(struct work_struct *work)
 				 codec->core.vendor_id);
 			bus->config_init_verbs(bus, codec->core.vendor_id);
 		}
+
+		/*
+		 * Pin default configs were cached during azx_probe_codecs()
+		 * with silicon defaults.  Now that init verbs have written
+		 * the correct pin configs to the codec hardware, refresh
+		 * the cache so autoconfig sees the updated values.
+		 */
+		list_for_each_codec(codec, &chip->bus) {
+			err = snd_hda_codec_update_widgets(codec);
+			if (err < 0)
+				dev_warn(hda->dev,
+					 "failed to refresh pin cache for codec 0x%08x: %d\n",
+					 codec->core.vendor_id, err);
+			else
+				dev_info(hda->dev,
+					 "refreshed pin config cache for codec 0x%08x\n",
+					 codec->core.vendor_id);
+		}
 	}
 
 	/* Pre-load the Realtek codec module before configure tries to bind */
