@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright 2024 Cix Technology Group Co., Ltd.
 
+#include <linux/acpi.h>
+#include <linux/arm-smccc.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
@@ -22,6 +24,133 @@
 
 #define CIX_IPBLOQ_ADDR_HOST_TO_HDAC_OFFSET	0x90000000
 
+/*
+ * SMC SCMI transport for audio power domain control.
+ *
+ * On CIX SKY1 the SCP firmware exposes the power domain protocol (0x11) on
+ * the SMC transport channel, NOT on the mailbox channel.  In the DT path the
+ * generic power-domain framework (genpd) handles this transparently via
+ * power-domains = <&smc_devpd SKY1_PD_AUDIO>, but in the ACPI path no SCMI
+ * POWER_STATE_SET is ever issued — the ACPI PRSS method is routed through the
+ * mailbox and silently succeeds without actually toggling power.
+ *
+ * The audio clock driver (clk-sky1-audss) already powers the domain on during
+ * its own probe, but PM genpd tears it down again ("Disabling unused power
+ * domains") before the HDA controller has a chance to probe.  We therefore
+ * must explicitly power the domain on ourselves, matching what the Mali GPU
+ * driver does for its own domain.
+ *
+ * Shared-memory layout and func-id match the DT arm,scmi-smc transport.
+ */
+#define SMC_SCMI_FUNC_ID	0xc2000001UL
+#define SMC_SCMI_SHMEM_PHYS	0x84380000UL
+#define SMC_SCMI_SHMEM_SIZE	0x80
+
+#define SHMEM_OFF_CHAN_STATUS	0x04
+#define SHMEM_OFF_FLAGS		0x10
+#define SHMEM_OFF_LENGTH	0x14
+#define SHMEM_OFF_MSG_HEADER	0x18
+#define SHMEM_OFF_MSG_PAYLOAD	0x1c
+#define SHMEM_CHAN_FREE		BIT(0)
+
+#define SCMI_HDR(proto, msg)	\
+	(((msg) & 0xFF) | (((proto) & 0xFF) << 10))
+
+#define SKY1_PD_AUDIO		0
+#define SCMI_PD_STATE_ON	0
+#define SCMI_PD_STATE_OFF	BIT(30)
+
+static int cix_smc_scmi_send(struct device *dev, u32 protocol, u32 msg_id,
+			     const u32 *payload, unsigned int payload_words,
+			     u32 *resp_status)
+{
+	void __iomem *shmem;
+	struct arm_smccc_res res;
+	int timeout;
+	unsigned int i;
+
+	shmem = ioremap(SMC_SCMI_SHMEM_PHYS, SMC_SCMI_SHMEM_SIZE);
+	if (!shmem) {
+		dev_err(dev, "cannot map SCMI SMC shmem\n");
+		return -ENOMEM;
+	}
+
+	timeout = 1000;
+	while (timeout-- > 0) {
+		if (ioread32(shmem + SHMEM_OFF_CHAN_STATUS) & SHMEM_CHAN_FREE)
+			break;
+		udelay(10);
+	}
+	if (timeout <= 0) {
+		dev_err(dev, "SCMI SMC channel busy\n");
+		iounmap(shmem);
+		return -EBUSY;
+	}
+
+	iowrite32(0, shmem + SHMEM_OFF_CHAN_STATUS);
+	iowrite32(0, shmem + SHMEM_OFF_FLAGS);
+	iowrite32(4 + payload_words * 4, shmem + SHMEM_OFF_LENGTH);
+	iowrite32(SCMI_HDR(protocol, msg_id), shmem + SHMEM_OFF_MSG_HEADER);
+	for (i = 0; i < payload_words; i++)
+		iowrite32(payload[i], shmem + SHMEM_OFF_MSG_PAYLOAD + i * 4);
+
+	arm_smccc_smc(SMC_SCMI_FUNC_ID,
+		      SMC_SCMI_SHMEM_PHYS >> 12, 0,
+		      0, 0, 0, 0, 0, &res);
+
+	if (res.a0) {
+		dev_err(dev, "SMC SCMI call failed: a0=0x%lx\n", res.a0);
+		iowrite32(SHMEM_CHAN_FREE, shmem + SHMEM_OFF_CHAN_STATUS);
+		iounmap(shmem);
+		return -EIO;
+	}
+
+	if (resp_status)
+		*resp_status = ioread32(shmem + SHMEM_OFF_MSG_PAYLOAD);
+
+	iowrite32(SHMEM_CHAN_FREE, shmem + SHMEM_OFF_CHAN_STATUS);
+	iounmap(shmem);
+	return 0;
+}
+
+static int cix_audio_power_set(struct device *dev, u32 state)
+{
+	u32 payload[3] = { 0, SKY1_PD_AUDIO, state };
+	u32 status;
+	int ret;
+
+	ret = cix_smc_scmi_send(dev, 0x11, 0x04, payload, 3, &status);
+	if (ret)
+		return ret;
+	if (status != 0) {
+		dev_err(dev, "SCMI POWER_STATE_SET(audio, 0x%x): error 0x%x\n",
+			state, status);
+		return -EIO;
+	}
+	return 0;
+}
+
+static int cix_audio_power_on(struct device *dev)
+{
+	int ret;
+
+	ret = cix_audio_power_set(dev, SCMI_PD_STATE_ON);
+	if (!ret)
+		dev_info(dev, "audio power domain ON via SMC SCMI\n");
+	return ret;
+}
+
+static void cix_audio_power_off(struct device *dev)
+{
+	int ret;
+
+	ret = cix_audio_power_set(dev, SCMI_PD_STATE_OFF);
+	if (!ret)
+		dev_dbg(dev, "audio power domain OFF via SMC SCMI\n");
+	else
+		dev_warn(dev, "failed to power off audio domain: %d\n", ret);
+}
+
 #define CIX_IPBLOQ_JACKPOLL_DEFAULT_TIME_MS	1000
 #define CIX_IPBLOQ_POWER_SAVE_DEFAULT_TIME_MS	100
 
@@ -41,6 +170,8 @@ struct cix_ipbloq_hda {
 	struct gpio_desc *depop_mute_gpiod;
 
 	const char *sname;
+
+	bool acpi_power_on; /* audio domain powered via SMC SCMI */
 };
 
 static const struct hda_controller_ops cix_ipbloq_hda_ops;
@@ -723,35 +854,11 @@ static int cix_ipbloq_hda_probe(struct platform_device *pdev)
 		goto out_free;
 	}
 
-	/* Enable clocks and perform a reset cycle so the HDA controller
-	 * is in a known state before any register access.  Without this
-	 * the codec may not enumerate on first boot (STATESTS stays 0).
-	 */
-	err = clk_bulk_prepare_enable(hda->nclocks, hda->clocks);
-	if (err) {
-		dev_err(&pdev->dev, "failed to enable clocks, err = %d\n", err);
-		goto out_free;
-	}
-
-	err = reset_control_bulk_assert(hda->nresets, hda->resets);
-	if (err) {
-		dev_err(&pdev->dev, "failed to assert reset, err = %d\n", err);
-		goto out_clk_disable;
-	}
-	usleep_range(10, 20);
-	err = reset_control_bulk_deassert(hda->nresets, hda->resets);
-	if (err) {
-		dev_err(&pdev->dev, "failed to deassert reset, err = %d\n", err);
-		goto out_clk_disable;
-	}
-	/* Allow HDA controller to stabilize after reset */
-	usleep_range(1000, 1500);
-
 	hda->pdb_gpiod = devm_gpiod_get_optional(&pdev->dev, "pdb", GPIOD_OUT_HIGH);
 	if (IS_ERR(hda->pdb_gpiod)) {
 		err = PTR_ERR(hda->pdb_gpiod);
 		dev_err(&pdev->dev, "failed to get pdb gpio, err: %d\n", err);
-		goto out_clk_disable;
+		goto out_free;
 	}
 	msleep(20);
 
@@ -759,19 +866,40 @@ static int cix_ipbloq_hda_probe(struct platform_device *pdev)
 	if (IS_ERR(hda->depop_mute_gpiod)) {
 		err = PTR_ERR(hda->depop_mute_gpiod);
 		dev_err(&pdev->dev, "failed to get depop gpio, err: %d\n", err);
-		goto out_clk_disable;
+		goto out_free;
 	}
 	gpiod_set_value_cansleep(hda->depop_mute_gpiod, 1);
 
 	err = cix_ipbloq_hda_create(card, driver_flags, hda);
 	if (err < 0)
-		goto out_clk_disable;
+		goto out_free;
 	card->private_data = chip;
 
 	dev_set_drvdata(&pdev->dev, card);
 
-	/* Mark device active so runtime PM knows clocks are already on */
-	pm_runtime_set_active(hda->dev);
+	/*
+	 * In ACPI mode the audio power domain (SKY1_PD_AUDIO) is not
+	 * managed by genpd.  The clock driver powers it on during its
+	 * own probe, but genpd tears it back down before we get here.
+	 * Power the domain on now so the codec is alive when we try to
+	 * enumerate it in probe_work → runtime_resume → azx_init_chip.
+	 */
+	if (ACPI_COMPANION(&pdev->dev)) {
+		err = cix_audio_power_on(&pdev->dev);
+		if (err)
+			dev_warn(&pdev->dev,
+				 "SCMI audio power-on failed (%d), codec may not enumerate\n",
+				 err);
+		else
+			hda->acpi_power_on = true;
+		/* Let SCP firmware process the power state change */
+		usleep_range(1000, 2000);
+	}
+
+	/* Do NOT call pm_runtime_set_active — let probe_work's
+	 * pm_runtime_get_sync trigger runtime_resume which does
+	 * clk_enable + reset, matching the 6.6 kernel flow.
+	 */
 	pm_runtime_enable(hda->dev);
 	if (!azx_has_pm_runtime(chip))
 		pm_runtime_forbid(hda->dev);
@@ -780,8 +908,6 @@ static int cix_ipbloq_hda_probe(struct platform_device *pdev)
 
 	return 0;
 
-out_clk_disable:
-	clk_bulk_disable_unprepare(hda->nclocks, hda->clocks);
 out_free:
 	snd_card_free(card);
 	return err;
@@ -883,6 +1009,9 @@ static int __maybe_unused cix_ipbloq_hda_runtime_suspend(struct device *dev)
 
 	clk_bulk_disable_unprepare(hda->nclocks, hda->clocks);
 
+	if (hda->acpi_power_on)
+		cix_audio_power_off(dev);
+
 	return 0;
 }
 
@@ -900,6 +1029,16 @@ static int __maybe_unused cix_ipbloq_hda_runtime_resume(struct device *dev)
 	hda = container_of(chip, struct cix_ipbloq_hda, chip);
 
 	dev_dbg(dev, "%s\n", __func__);
+
+	/* Re-enable audio power domain before touching clocks/resets */
+	if (hda->acpi_power_on) {
+		rc = cix_audio_power_on(dev);
+		if (rc) {
+			dev_err(dev, "SCMI audio power-on failed on resume: %d\n", rc);
+			return rc;
+		}
+		usleep_range(1000, 2000);
+	}
 
 	rc = clk_bulk_prepare_enable(hda->nclocks, hda->clocks);
 	if (rc) {
