@@ -462,26 +462,4 @@ config ARCH_ZYNQMP
 	help
 	  This enables support for Xilinx ZynqMP Family
 
-config ARCH_CIX
-	bool "cixtech SoC family"
-	help
-	  This enables support for the cixtech SoC family.
-
-config ARCH_CIX_EMU
-	bool "cixtech SoC family on EMU"
-	select ARCH_CIX_EMU_FPGA
-	help
-	  This enables support for the cixtech SoC family on EMU.
-
-config ARCH_CIX_FPGA
-	bool "cixtech SoC family on FPGA"
-	select ARCH_CIX_EMU_FPGA
-	help
-	  This enables support for the cixtech SoC family on FPGA.
-
-config ARCH_CIX_EMU_FPGA
-	bool "cixtech SoC family on both EMU and FPGA"
-	help
-	  Please use this configuration for both EMU and FPGA suitable code.
-
 endmenu # "Platform selection"

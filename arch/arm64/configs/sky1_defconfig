@@ -391,9 +391,7 @@ CONFIG_ARCH_CIX=y
 # CONFIG_ARCH_VISCONTI is not set
 # CONFIG_ARCH_XGENE is not set
 # CONFIG_ARCH_ZYNQMP is not set
-# CONFIG_ARCH_CIX_EMU is not set
-# CONFIG_ARCH_CIX_FPGA is not set
-# CONFIG_ARCH_CIX_EMU_FPGA is not set
+
 # end of Platform selection
 
 #
