@@ -668,38 +668,63 @@ static int cix_ipbloq_hda_config_init_verbs(struct hdac_bus *bus, unsigned int v
 	struct snd_card *card = dev_get_drvdata(bus->dev);
 	struct azx *chip = card->private_data;
 	struct cix_ipbloq_hda *hda = container_of(chip, struct cix_ipbloq_hda, chip);
-	unsigned int *init_verbs, size;
+	unsigned int *init_verbs = NULL;
+	unsigned int size = 0;
 	int i;
 
-	dev_dbg(bus->dev, "vendor id = 0x%x\n", vendor_id);
+	dev_info(bus->dev, "config_init_verbs: vendor_id=0x%08x sname=%s\n",
+		 vendor_id, hda->sname ? hda->sname : "(null)");
 
 	switch (vendor_id) {
 	case 0x10ec0256:
 		if (hda->sname && !strcmp(hda->sname, "CIX SKY1 EVB HDA")) {
-			dev_dbg(bus->dev, "CIX SKY1 EVB HDA\n");
+			dev_info(bus->dev, "using CIX SKY1 EVB HDA verbs\n");
 			init_verbs = alc256_cix_evb_init_verbs;
 			size = ARRAY_SIZE(alc256_cix_evb_init_verbs);
 		} else if (hda->sname && !strcmp(hda->sname, "CIX SKY1 ORION O6 HDA")) {
-			dev_dbg(bus->dev, "CIX SKY1 ORION O6 HDA\n");
+			dev_info(bus->dev, "using CIX SKY1 ORION O6 HDA verbs\n");
+			init_verbs = alc256_cix_orion_o6_init_verbs;
+			size = ARRAY_SIZE(alc256_cix_orion_o6_init_verbs);
+		} else {
+			/*
+			 * In ACPI mode the _DSD may not set "cix,model", so
+			 * sname defaults to "cix-ipbloq-hda".  Fall back to
+			 * the Orion O6 verb table as that is the primary board
+			 * using this SoC with ALC256.
+			 */
+			dev_info(bus->dev,
+				 "sname '%s' unknown for ALC256, defaulting to Orion O6 verbs\n",
+				 hda->sname ? hda->sname : "(null)");
 			init_verbs = alc256_cix_orion_o6_init_verbs;
 			size = ARRAY_SIZE(alc256_cix_orion_o6_init_verbs);
 		}
 		break;
 	case 0x10ec0269:
 		if (hda->sname && !strcmp(hda->sname, "CIX SKY1 ORAPI 6P HDA")) {
-			dev_dbg(bus->dev, "CIX SKY1 ORAPI 6P HDA\n");
+			dev_info(bus->dev, "using CIX SKY1 ORAPI 6P HDA verbs\n");
 			init_verbs = alc269_cix_orapi_6p_init_verbs;
 			size = ARRAY_SIZE(alc269_cix_orapi_6p_init_verbs);
+		} else {
+			dev_warn(bus->dev,
+				 "no init verbs for ALC269 on board '%s'\n",
+				 hda->sname ? hda->sname : "(null)");
+			return 0;
 		}
 		break;
 	default:
-		dev_err(bus->dev, "unsupport codec chip\n");
-		return -EINVAL;
+		dev_warn(bus->dev,
+			 "no init verbs for codec vendor 0x%08x\n", vendor_id);
+		return 0;
 	}
 
-	for (i = 0; i < size; i++)
-		bus->ops->command(bus,  init_verbs[i]);
+	if (!init_verbs || !size)
+		return 0;
 
+	for (i = 0; i < size; i++)
+		bus->ops->command(bus, init_verbs[i]);
+
+	dev_info(bus->dev, "sent %u init verbs for codec 0x%08x\n",
+		 size, vendor_id);
 	return 0;
 }
 
@@ -873,6 +898,29 @@ static void cix_ipbloq_hda_probe_work(struct work_struct *work)
 	err = azx_probe_codecs(chip, 8);
 	if (err < 0)
 		goto out_free;
+
+	/*
+	 * Send board-specific init verbs (pin configs, subsystem ID, etc.)
+	 * BEFORE codec driver binding.  The config_init_verbs callback was
+	 * registered but the HDA core never invokes it, so call it here
+	 * for each discovered codec.  This must happen after CORB/RIRB are
+	 * running (azx_init_chip in cix_ipbloq_hda_init) and after the
+	 * codec device is created (azx_probe_codecs), but before the codec
+	 * driver reads pin configurations (azx_codec_configure).
+	 */
+	if (bus->config_init_verbs) {
+		struct hda_codec *codec;
+
+		list_for_each_codec(codec, &chip->bus) {
+			dev_info(hda->dev,
+				 "sending init verbs for codec vendor 0x%08x\n",
+				 codec->core.vendor_id);
+			bus->config_init_verbs(bus, codec->core.vendor_id);
+		}
+	}
+
+	/* Pre-load the Realtek codec module before configure tries to bind */
+	request_module("snd-hda-codec-alc269");
 
 	err = azx_codec_configure(chip);
 	if (err < 0)
