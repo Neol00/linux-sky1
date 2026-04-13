@@ -60,6 +60,61 @@
 #define SCMI_PD_STATE_ON	0
 #define SCMI_PD_STATE_OFF	BIT(30)
 
+/*
+ * ACPI-mode hardware init for HDA codec power-on.
+ *
+ * In ACPI boot the firmware does not define the fch_gpio3 controller or
+ * apply HDA pin-mux, so the codec PDN# (power-down-bar) is never driven
+ * and the HDA link pins may not be muxed.  We fix this with direct MMIO.
+ */
+
+/* Pinctrl – IOMUX base for pad configuration (function + config) */
+#define SKY1_PINCTRL_BASE	0x04170000UL
+#define SKY1_PINCTRL_SIZE	0x200
+#define SKY1_PIN_SIZE		4	/* one 32-bit register per pin */
+
+/* HDA pin assignments: pin_number, register_value (mux=0 | config) */
+struct sky1_hda_pin_cfg {
+	unsigned int pin;
+	u32 val;
+};
+
+/*
+ * Function 0 = HDA for pins 42-48.
+ * Config: bits[8:7]=mux(0), bit6=PU, bit5=PD, bit4=ST, bits[3:0]=DS
+ *   PULL_DOWN | ST | DS_LEVEL12 = 0x3c
+ *   PULL_UP   | ST | DS_LEVEL12 = 0x5c
+ */
+static const struct sky1_hda_pin_cfg sky1_hda_pins[] = {
+	{ 42, 0x3c },	/* HDA_BITCLK: PD|ST|DS12 */
+	{ 43, 0x3c },	/* HDA_RST_L:  PD|ST|DS12 */
+	{ 44, 0x3c },	/* HDA_SDIN0:  PD|ST|DS12 */
+	{ 45, 0x5c },	/* HDA_SDOUT0: PU|ST|DS12 */
+	{ 46, 0x5c },	/* HDA_SYNC:   PU|ST|DS12 */
+	{ 47, 0x3c },	/* HDA_SDIN1:  PD|ST|DS12 */
+	{ 48, 0x3c },	/* HDA_SDOUT1: PD|ST|DS12 */
+};
+
+/* fch_gpio3 – Cadence GPIO controller for codec PDN# */
+#define FCH_GPIO3_BASE		0x04150000UL
+#define FCH_GPIO3_SIZE		0x30
+#define CDNS_GPIO_BYPASS_MODE	0x00
+#define CDNS_GPIO_DIRECTION	0x04
+#define CDNS_GPIO_OUTPUT_EN	0x08
+#define CDNS_GPIO_OUTPUT_VALUE	0x0c
+#define FCH_GPIO3_PDB_PIN	5	/* codec power-down-bar on gpio3 pin 5 */
+
+/* FCH reset controller – deassert GPIO APB reset */
+#define FCH_SRC_BASE		0x04160000UL
+#define FCH_SRC_SIZE		0x90
+#define FCH_SW_RST_BUS_OFF	0x0c
+#define FCH_GPIO_RST_BIT	BIT(21)
+
+/* SCMI clock protocol for GPIO APB clock */
+#define SCMI_PROTO_CLOCK	0x14
+#define SCMI_CLK_CONFIG_SET	0x07
+#define CLK_FCH_GPIO_APB	262	/* CLK_TREE_FCH_GPIO_APB */
+
 static int cix_smc_scmi_send(struct device *dev, u32 protocol, u32 msg_id,
 			     const u32 *payload, unsigned int payload_words,
 			     u32 *resp_status)
@@ -149,6 +204,107 @@ static void cix_audio_power_off(struct device *dev)
 		dev_dbg(dev, "audio power domain OFF via SMC SCMI\n");
 	else
 		dev_warn(dev, "failed to power off audio domain: %d\n", ret);
+}
+
+/*
+ * cix_acpi_hda_hw_init - Configure pin-mux and codec GPIO for ACPI boot.
+ *
+ * In ACPI mode the DSDT does not define the fch_gpio3 controller, so the
+ * ALC256 codec PDN# pin is never driven HIGH (codec stays powered off).
+ * The HDA pad mux may also not be applied.  We configure everything here
+ * via direct MMIO before the HDA link reset attempts codec enumeration.
+ */
+static int cix_acpi_hda_hw_init(struct device *dev)
+{
+	void __iomem *pinctrl, *gpio, *rst;
+	u32 val;
+	int i, ret;
+
+	/* 1. Enable GPIO APB clock via SCMI */
+	{
+		u32 clk_payload[2] = { CLK_FCH_GPIO_APB, 1 };
+		u32 status;
+
+		ret = cix_smc_scmi_send(dev, SCMI_PROTO_CLOCK,
+					SCMI_CLK_CONFIG_SET,
+					clk_payload, 2, &status);
+		if (ret || status)
+			dev_warn(dev, "SCMI clock enable GPIO APB: ret=%d status=0x%x (continuing)\n",
+				 ret, status);
+		else
+			dev_info(dev, "GPIO APB clock enabled via SCMI\n");
+	}
+
+	/* 2. Deassert GPIO APB reset */
+	rst = ioremap(FCH_SRC_BASE, FCH_SRC_SIZE);
+	if (!rst) {
+		dev_warn(dev, "cannot map FCH reset controller\n");
+	} else {
+		val = readl(rst + FCH_SW_RST_BUS_OFF);
+		if (!(val & FCH_GPIO_RST_BIT)) {
+			val |= FCH_GPIO_RST_BIT;
+			writel(val, rst + FCH_SW_RST_BUS_OFF);
+			usleep_range(100, 200);
+			dev_info(dev, "GPIO APB reset deasserted\n");
+		} else {
+			dev_info(dev, "GPIO APB reset already deasserted\n");
+		}
+		iounmap(rst);
+	}
+
+	/* 3. Configure HDA pin mux */
+	pinctrl = ioremap(SKY1_PINCTRL_BASE, SKY1_PINCTRL_SIZE);
+	if (!pinctrl) {
+		dev_warn(dev, "cannot map pinctrl for HDA mux\n");
+	} else {
+		for (i = 0; i < ARRAY_SIZE(sky1_hda_pins); i++) {
+			void __iomem *reg = pinctrl +
+				sky1_hda_pins[i].pin * SKY1_PIN_SIZE;
+			u32 old = readl(reg);
+
+			writel(sky1_hda_pins[i].val, reg);
+			dev_info(dev, "pin %u mux: 0x%03x -> 0x%03x\n",
+				 sky1_hda_pins[i].pin, old,
+				 sky1_hda_pins[i].val);
+		}
+		iounmap(pinctrl);
+	}
+
+	/* 4. Drive codec PDN# (power-down-bar) HIGH via fch_gpio3 pin 5 */
+	gpio = ioremap(FCH_GPIO3_BASE, FCH_GPIO3_SIZE);
+	if (!gpio) {
+		dev_err(dev, "cannot map fch_gpio3 – codec will stay off!\n");
+		return -ENOMEM;
+	}
+
+	/* Disable bypass for pin 5 (use GPIO mode) */
+	val = readl(gpio + CDNS_GPIO_BYPASS_MODE);
+	val &= ~BIT(FCH_GPIO3_PDB_PIN);
+	writel(val, gpio + CDNS_GPIO_BYPASS_MODE);
+
+	/* Set pin 5 as output (direction = 0 means output) */
+	val = readl(gpio + CDNS_GPIO_DIRECTION);
+	val &= ~BIT(FCH_GPIO3_PDB_PIN);
+	writel(val, gpio + CDNS_GPIO_DIRECTION);
+
+	/* Enable output for pin 5 */
+	val = readl(gpio + CDNS_GPIO_OUTPUT_EN);
+	val |= BIT(FCH_GPIO3_PDB_PIN);
+	writel(val, gpio + CDNS_GPIO_OUTPUT_EN);
+
+	/* Drive pin 5 HIGH */
+	val = readl(gpio + CDNS_GPIO_OUTPUT_VALUE);
+	val |= BIT(FCH_GPIO3_PDB_PIN);
+	writel(val, gpio + CDNS_GPIO_OUTPUT_VALUE);
+
+	iounmap(gpio);
+	dev_info(dev, "codec PDN# (fch_gpio3 pin %d) driven HIGH\n",
+		 FCH_GPIO3_PDB_PIN);
+
+	/* 5. Wait for codec to power up (ALC256 needs ~20ms after PDN# HIGH) */
+	msleep(50);
+
+	return 0;
 }
 
 #define CIX_IPBLOQ_JACKPOLL_DEFAULT_TIME_MS	1000
@@ -894,6 +1050,16 @@ static int cix_ipbloq_hda_probe(struct platform_device *pdev)
 			hda->acpi_power_on = true;
 		/* Let SCP firmware process the power state change */
 		usleep_range(1000, 2000);
+
+		/*
+		 * Configure HDA pin mux & drive codec PDN# HIGH.
+		 * This must happen after the audio power domain is on.
+		 */
+		err = cix_acpi_hda_hw_init(&pdev->dev);
+		if (err)
+			dev_warn(&pdev->dev,
+				 "ACPI HW init failed (%d), codec may not enumerate\n",
+				 err);
 	}
 
 	/* Do NOT call pm_runtime_set_active — let probe_work's
@@ -1038,6 +1204,9 @@ static int __maybe_unused cix_ipbloq_hda_runtime_resume(struct device *dev)
 			return rc;
 		}
 		usleep_range(1000, 2000);
+
+		/* Re-init pin mux and codec PDN# after power domain comes back */
+		cix_acpi_hda_hw_init(dev);
 	}
 
 	rc = clk_bulk_prepare_enable(hda->nclocks, hda->clocks);
