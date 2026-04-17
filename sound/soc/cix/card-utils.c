@@ -938,7 +938,7 @@ int cix_card_parse_acpi(struct cix_asoc_card *priv)
 				sizeof(struct snd_soc_dai_link));
 		memcpy(link_info, &sky1_link_info[idx],
 				sizeof(struct dai_link_info));
-		dev_info(dev, "audio: cpu[%s][%s] codec[%s][%s] platform[%s]\n",
+		dev_dbg(dev, "audio: cpu[%s][%s] codec[%s][%s] platform[%s]\n",
 			link->cpus->name, link->cpus->dai_name,
 			link->codecs->name, link->codecs->dai_name,
 			link->platforms->name);

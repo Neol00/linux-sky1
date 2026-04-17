@@ -302,9 +302,9 @@ scmi_perf_domain_attributes_get(const struct scmi_protocol_handle *ph,
 					/ dom_info->sustained_perf_level;
 			if ((dom_info->sustained_freq_khz * 1000UL) %
 			    dom_info->sustained_perf_level)
-				dev_warn(ph->dev,
-					 "multiplier for domain %d rounded\n",
-					 dom_info->id);
+				dev_dbg(ph->dev,
+					"multiplier for domain %d rounded\n",
+					dom_info->id);
 		}
 #ifdef CONFIG_ARCH_CIX
 		/*
@@ -313,12 +313,12 @@ scmi_perf_domain_attributes_get(const struct scmi_protocol_handle *ph,
 		 *   freq = perf_MHz * 1000000 = Hz  (for OPP/devfreq)
 		 *   level = freq_Hz / 1000000 = MHz (for PERF_LEVEL_SET)
 		 */
-		dev_info(ph->dev,
-			 "CIX domain %d: sustained_freq_khz=%u sustained_perf_level=%u computed_mult=%lu, overriding to 1000000\n",
-			 dom_info->id,
-			 dom_info->sustained_freq_khz,
-			 dom_info->sustained_perf_level,
-			 dom_info->mult_factor);
+		dev_dbg(ph->dev,
+			"CIX domain %d: sustained_freq_khz=%u sustained_perf_level=%u computed_mult=%lu, overriding to 1000000\n",
+			dom_info->id,
+			dom_info->sustained_freq_khz,
+			dom_info->sustained_perf_level,
+			dom_info->mult_factor);
 		dom_info->mult_factor = 1000000;
 #endif
 		if (!dom_info->mult_factor)

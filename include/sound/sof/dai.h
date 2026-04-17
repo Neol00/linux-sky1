@@ -122,6 +122,8 @@ struct sof_ipc_dai_config {
 		struct sof_ipc_dai_mtk_afe_params afe;
 		struct sof_ipc_dai_micfil_params micfil;
 		struct sof_ipc_dai_acp_sdw_params acp_sdw;
+		struct sof_ipc_dai_i2s_sc_params i2s_sc;
+		struct sof_ipc_dai_i2s_mc_params i2s_mc;
 	};
 } __packed;
 

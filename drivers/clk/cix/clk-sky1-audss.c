@@ -166,32 +166,7 @@ static int sky1_audio_power_on(struct device *dev)
 			status);
 		return -EIO;
 	}
-	dev_info(dev, "SCMI audio power domain ON via SMC\n");
-	return 0;
-}
-
-/*
- * Set a clock rate via SMC SCMI CLOCK_RATE_SET.
- * protocol 0x14, message 0x05, payload: flags(0) + clk_id + rate_low + rate_hi.
- */
-static int sky1_smc_clock_rate_set(struct device *dev, u32 clk_id, u64 rate)
-{
-	u32 payload[4] = { 0, clk_id, (u32)(rate & 0xFFFFFFFF),
-			   (u32)(rate >> 32) };
-	u32 status;
-	int ret;
-
-	ret = sky1_smc_scmi_send(dev, 0x14, 0x05, payload, 4, &status);
-	if (ret)
-		return ret;
-	if (status != 0) {
-		dev_warn(dev,
-			 "SMC CLOCK_RATE_SET(clk %u, %llu Hz): SCMI error 0x%x\n",
-			 clk_id, rate, status);
-		return -EIO;
-	}
-	dev_info(dev, "SMC CLOCK_RATE_SET(clk %u, %llu Hz): OK\n",
-		 clk_id, rate);
+	dev_dbg(dev, "SCMI audio power domain ON via SMC\n");
 	return 0;
 }
 
@@ -1164,10 +1139,10 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 		regmap_cru = device_syscon_regmap_lookup_by_property(dev,
 					"audss_cru");
 	if (IS_ERR_OR_NULL(regmap_cru)) {
-		dev_info(dev, "audss_cru regmap not available, deferring\n");
+		dev_dbg(dev, "audss_cru regmap not available, deferring\n");
 		return -EPROBE_DEFER;
 	}
-	dev_info(dev, "audss_cru: regmap acquired successfully\n");
+	dev_dbg(dev, "audss_cru: regmap acquired successfully\n");
 
 	clk_data = devm_kzalloc(&pdev->dev,
 				struct_size(clk_data, hws, AUDSS_MAX_CLKS),

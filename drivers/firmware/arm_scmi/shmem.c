@@ -194,7 +194,22 @@ static void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
 			if (xfer->tx.len > PM_MSG_MAX_LEN_TX)
 				pr_err("TX Length is OVERSIZE!\n");
 #endif
+#ifdef CONFIG_ARCH_CIX
+		/*
+		 * CIX Sky1 SCP firmware requires 32-bit aligned MMIO writes
+		 * to shared memory — memcpy_toio may use byte-width stores
+		 * on ARM64, which the SCP silently ignores.
+		 */
+		{
+			int i;
+
+			for (i = 0; i < DIV_ROUND_UP(xfer->tx.len, 4); i++)
+				__raw_writel(((u32 *)xfer->tx.buf)[i],
+					     shmem->msg_payload + 4 * i);
+		}
+#else
 		copy_toio(shmem->msg_payload, xfer->tx.buf, xfer->tx.len);
+#endif
 	}
 	/* Ensure all payload writes complete before signaling firmware */
 	wmb();
@@ -241,6 +256,19 @@ static void shmem_fetch_response(struct scmi_shared_mem __iomem *shmem,
 #endif
 
 	/* Take a copy to the rx buffer.. */
+#ifdef CONFIG_ARCH_CIX
+	{
+		int i;
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+		int off = isCustomized ? 12 : 1;
+#else
+		int off = 1;
+#endif
+		for (i = 0; i < DIV_ROUND_UP(xfer->rx.len, 4); i++)
+			((u32 *)xfer->rx.buf)[i] =
+				ioread32(shmem->msg_payload + 4 * (i + off));
+	}
+#else
 #ifdef CONFIG_PM_EXCEPTION_PROTOCOL
 	if (isCustomized)
 		copy_fromio(xfer->rx.buf, shmem->msg_payload + 4 * 12, xfer->rx.len);
@@ -248,6 +276,7 @@ static void shmem_fetch_response(struct scmi_shared_mem __iomem *shmem,
 		copy_fromio(xfer->rx.buf, shmem->msg_payload + 4, xfer->rx.len);
 #else
 	copy_fromio(xfer->rx.buf, shmem->msg_payload + 4, xfer->rx.len);
+#endif
 #endif
 }
 
@@ -261,7 +290,17 @@ static void shmem_fetch_notification(struct scmi_shared_mem __iomem *shmem,
 	xfer->rx.len = min_t(size_t, max_len, len > 4 ? len - 4 : 0);
 
 	/* Take a copy to the rx buffer.. */
+#ifdef CONFIG_ARCH_CIX
+	{
+		int i;
+
+		for (i = 0; i < DIV_ROUND_UP(xfer->rx.len, 4); i++)
+			((u32 *)xfer->rx.buf)[i] =
+				ioread32(shmem->msg_payload + 4 * i);
+	}
+#else
 	copy_fromio(xfer->rx.buf, shmem->msg_payload, xfer->rx.len);
+#endif
 }
 
 static void shmem_clear_channel(struct scmi_shared_mem __iomem *shmem)

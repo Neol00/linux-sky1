@@ -2021,9 +2021,9 @@ err_xfer:
 	ph->xops->xfer_put(ph, t);
 
 err_out:
-	dev_info(ph->dev,
-		 "Cannot configure FC for protocol %X [MSG_ID:%u / RES_ID:%u] - ret:%d. Using regular messaging.\n",
-		 pi->proto->id, message_id, domain, ret);
+	dev_dbg(ph->dev,
+		"Cannot configure FC for protocol %X [MSG_ID:%u / RES_ID:%u] - ret:%d. Using regular messaging.\n",
+		pi->proto->id, message_id, domain, ret);
 }
 
 #define SCMI_PROTO_FC_RING_DB(w)			\

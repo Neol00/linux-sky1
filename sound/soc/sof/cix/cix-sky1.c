@@ -330,7 +330,7 @@ exit_pdev_unregister:
 	return ret;
 }
 
-static int sky1_remove(struct snd_sof_dev *sdev)
+static void sky1_remove(struct snd_sof_dev *sdev)
 {
 	struct sky1_priv *priv = sdev->pdata->hw_pdata;
 
@@ -339,8 +339,6 @@ static int sky1_remove(struct snd_sof_dev *sdev)
 	cix_disable_clocks(sdev, priv->clks);
 
 	platform_device_unregister(priv->ipc_dev);
-
-	return 0;
 }
 
 /* on CIX there is 1 to 1 match between type and BAR idx */
@@ -548,16 +546,16 @@ static struct snd_sof_of_mach sof_sky1_machs[] = {
 
 static struct sof_dev_desc sof_of_sky1_desc = {
 	.of_machines	= sof_sky1_machs,
-	.ipc_supported_mask	= BIT(SOF_IPC),
-	.ipc_default		= SOF_IPC,
+	.ipc_supported_mask	= BIT(SOF_IPC_TYPE_3),
+	.ipc_default		= SOF_IPC_TYPE_3,
 	.default_fw_path = {
-		[SOF_IPC] = "cix/sof",
+		[SOF_IPC_TYPE_3] = "cix/sof",
 	},
 	.default_tplg_path = {
-		[SOF_IPC] = "cix/sof-tplg",
+		[SOF_IPC_TYPE_3] = "cix/sof-tplg",
 	},
 	.default_fw_filename = {
-		[SOF_IPC] = "sof-sky1.ri",
+		[SOF_IPC_TYPE_3] = "sof-sky1.ri",
 	},
 	.nocodec_tplg_filename = "sof-sky1-nocodec.tplg",
 	.ops = &sof_sky1_ops,
@@ -580,6 +578,6 @@ static struct platform_driver snd_sof_of_sky1_driver = {
 };
 module_platform_driver(snd_sof_of_sky1_driver);
 
-MODULE_IMPORT_NS(SND_SOC_SOF_XTENSA);
+MODULE_IMPORT_NS("SND_SOC_SOF_XTENSA");
 MODULE_AUTHOR("Joakim Zhang <joakim.zhang@cixtech.com>");
 MODULE_LICENSE("Dual BSD/GPL");
